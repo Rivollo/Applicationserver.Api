@@ -1,26 +1,24 @@
-# syntax=docker/dockerfile:1
+# Use an official Python runtime
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-	PYTHONUNBUFFERED=1 \
-	PORT=8000
-
+# Set working dir
 WORKDIR /app
 
-# System deps (optional: add build tools if needed)
+# Install build deps, copy requirements, install packages
+COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
-		ca-certificates \
-	&& rm -rf /var/lib/apt/lists/*
+    build-essential gcc \
+  && pip install --no-cache-dir -r requirements.txt \
+  && apt-get purge -y --auto-remove build-essential gcc \
+  && rm -rf /var/lib/apt/lists/*
 
-# Install Python deps first (cache layer)
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip \
-	&& pip install --no-cache-dir -r requirements.txt
+# Copy application code
+COPY . .
 
-# Copy app code
-COPY app ./app
+# Expose port expected by Azure ($PORT environment variable is set by App Service)
+ENV PORT=8080
+EXPOSE ${PORT}
 
-EXPOSE 8000
-
-# Use sh -c so ${PORT} expands at runtime (Azure sets PORT)
-CMD ["sh","-c","gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:${PORT:-8000} app.main:app"]
+# If your app is main.py with `app = FastAPI()` use main:app
+# Use Gunicorn with Uvicorn worker (good for production)
+CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8080", "main:app"]
