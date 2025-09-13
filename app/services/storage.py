@@ -48,28 +48,48 @@ class StorageService:
 		# Generate SAS using SDK helper if available; otherwise raise a clear error
 		try:
 			from azure.storage.blob import generate_blob_sas, BlobSasPermissions  # type: ignore
+			from azure.storage.blob import ResourceTypes  # type: ignore
 		except Exception:
 			raise RuntimeError("Azure SDK does not expose SAS helpers. Ensure azure-storage-blob is installed.")
 
-		account_name = client.account_name  # type: ignore
+		expiry_time = datetime.utcnow() + timedelta(minutes=60)
+		starts_on = datetime.utcnow() 
+
+		account_name = getattr(client, "account_name", None)  # type: ignore
+		sas_token: str
+		account_key = None
 		if settings.AZURE_STORAGE_KEY:
 			account_key = settings.AZURE_STORAGE_KEY
 		else:
-			# When using connection string, pull key from credential if possible
-			credential = getattr(client.credential, "account_key", None)  # type: ignore
-			if not credential:
-				raise RuntimeError("Azure account key not available for SAS generation. Set AZURE_STORAGE_KEY or use a key-bearing connection string.")
-			account_key = credential  # type: ignore
+			account_key = getattr(getattr(client, "credential", object()), "account_key", None)  # type: ignore
 
-		expiry_time = datetime.utcnow() + timedelta(minutes=15)
-		sas_token = generate_blob_sas(
-			account_name=account_name,
-			container_name=container,
-			blob_name=blob_path,
-			account_key=account_key,
-			permission=BlobSasPermissions(write=True, create=True),
-			expiry=expiry_time,
-		)
+		if account_key:
+			# Use account key SAS
+			sas_token = generate_blob_sas(
+				account_name=account_name,
+				container_name=container,
+				blob_name=blob_path,
+				account_key=account_key,
+				permission=BlobSasPermissions(write=True, create=True),
+				expiry=expiry_time,
+				start=starts_on,
+			)
+		else:
+			# Fallback: use user delegation SAS (Managed Identity / AAD)
+			try:
+				udk = client.get_user_delegation_key(starts_on=starts_on, expires_on=expiry_time)  # type: ignore
+				sas_token = generate_blob_sas(
+					account_name=account_name,
+					container_name=container,
+					blob_name=blob_path,
+					user_delegation_key=udk,
+					permission=BlobSasPermissions(write=True, create=True),
+					expiry=expiry_time,
+					start=starts_on,
+				)
+			except Exception as ex:
+				raise RuntimeError("Unable to generate SAS: set AZURE_STORAGE_KEY or grant Managed Identity Blob Data Contributor.") from ex
+
 		upload_url = f"{blob_client.url}?{sas_token}"
 		return upload_url, cdn_file_url
 
