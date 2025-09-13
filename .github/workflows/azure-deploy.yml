@@ -28,18 +28,38 @@ jobs:
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Build and push image
+      - name: Set tags
+        id: tags
+        run: |
+          # simple numeric tag using GitHub run number; you can change to any scheme you like
+          echo "TAG_NUM=build-${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
+          echo "TAG_LATEST=latest" >> $GITHUB_ENV
+          echo "IMAGE_NUM=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }}" >> $GITHUB_ENV
+          echo "IMAGE_LATEST=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_LATEST }}" >> $GITHUB_ENV
+          echo "Using numeric tag: build-${GITHUB_RUN_NUMBER}"
+
+      - name: Build and push (both numeric and latest)
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ github.sha }}
-            ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }}
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_LATEST }}
 
-      - name: Deploy container to Azure Web App
+      - name: Print pushed image digests (traceability)
+        run: |
+          echo "GIT_COMMIT=${GITHUB_SHA}"
+          docker pull ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }}
+          echo "Numeric image repo digests:"
+          docker inspect --format='{{index .RepoDigests 0}}' ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }} || true
+          docker pull ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          echo "Latest image repo digests:"
+          docker inspect --format='{{index .RepoDigests 0}}' ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest || true
+
+      - name: Deploy numeric-tagged image to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
-          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ github.sha }}
+          images: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:build-${{ github.run_number }}
