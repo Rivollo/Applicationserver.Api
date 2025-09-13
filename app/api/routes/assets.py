@@ -17,7 +17,7 @@ def get_asset(id: str, user_id: str = Depends(get_current_user_id), db: Session 
 		asset_id = uuid.UUID(id)
 	except ValueError:
 		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
-	asset = db.query(Asset).filter(Asset.id == asset_id).one_or_none()
+	asset = db.query(Asset).filter(Asset.id == asset_id, Asset.created_by == user_id).one_or_none()
 	if asset is None:
 		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
 	parts = db.query(AssetPart).filter(AssetPart.asset_id == asset.id).order_by(AssetPart.position.asc()).all()

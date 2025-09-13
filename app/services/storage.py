@@ -37,11 +37,41 @@ class StorageService:
 
 	def create_presigned_upload(self, user_id: str, filename: str) -> tuple[str, str]:
 		upload_id = str(uuid.uuid4())
-		key = f"users/{user_id}/uploads/{upload_id}/{quote(filename)}"
-		file_url = f"{settings.CDN_BASE_URL}/{key}"
-		expiry = int((datetime.utcnow() + timedelta(minutes=15)).timestamp())
-		upload_url = f"{file_url}?sas=stub&exp={expiry}"
-		return upload_url, file_url
+		blob_path = f"users/{user_id}/uploads/{upload_id}/{quote(filename)}"
+		cdn_file_url = f"{settings.CDN_BASE_URL}/{blob_path}"
+
+		# Build a real SAS URL for PUT to the Azure Blob endpoint
+		client = self._get_blob_service_client()
+		container = settings.STORAGE_CONTAINER_UPLOADS or "uploads"
+		blob_client = client.get_blob_client(container=container, blob=blob_path)
+
+		# Generate SAS using SDK helper if available; otherwise raise a clear error
+		try:
+			from azure.storage.blob import generate_blob_sas, BlobSasPermissions  # type: ignore
+		except Exception:
+			raise RuntimeError("Azure SDK does not expose SAS helpers. Ensure azure-storage-blob is installed.")
+
+		account_name = client.account_name  # type: ignore
+		if settings.AZURE_STORAGE_KEY:
+			account_key = settings.AZURE_STORAGE_KEY
+		else:
+			# When using connection string, pull key from credential if possible
+			credential = getattr(client.credential, "account_key", None)  # type: ignore
+			if not credential:
+				raise RuntimeError("Azure account key not available for SAS generation. Set AZURE_STORAGE_KEY or use a key-bearing connection string.")
+			account_key = credential  # type: ignore
+
+		expiry_time = datetime.utcnow() + timedelta(minutes=15)
+		sas_token = generate_blob_sas(
+			account_name=account_name,
+			container_name=container,
+			blob_name=blob_path,
+			account_key=account_key,
+			permission=BlobSasPermissions(write=True, create=True),
+			expiry=expiry_time,
+		)
+		upload_url = f"{blob_client.url}?{sas_token}"
+		return upload_url, cdn_file_url
 
 	def asset_part_url(self, user_id: str, blueprint_id: str, asset_id: str, part_id: str, name: str, ext: str) -> str:
 		key = f"users/{user_id}/blueprints/{blueprint_id}/asset/{asset_id}/parts/{part_id}-{quote(name)}.{ext}"
