@@ -19,8 +19,6 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # Copy app code
 COPY app ./app
-COPY "API docs" ./API docs
-COPY README.md ./README.md
 
 EXPOSE 8000
 
