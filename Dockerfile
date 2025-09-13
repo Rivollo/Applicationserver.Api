@@ -21,4 +21,5 @@ EXPOSE ${PORT}
 
 # If your app is main.py with `app = FastAPI()` use main:app
 # Use Gunicorn with Uvicorn worker (good for production)
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8080", "main:app"]
+# Use shell form so $PORT (set by Azure) is respected, defaulting to 8080 locally
+CMD ["sh", "-c", "gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:${PORT:-8080} app.main:app"]
