@@ -10,3 +10,4 @@ python-dotenv==1.0.1
 azure-storage-blob==12.23.1
 email-validator==2.1.0.post1
 python-multipart==0.0.9
+gunicorn==21.2.0
