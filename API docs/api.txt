@@ -1,0 +1,172 @@
+API implementation guideline — Rivollo Mobile API (based on your OpenAPI 3.1 spec)
+Great OpenAPI surface — compact and suitable for mobile clients. Below is a practical, copy-pasteable implementation guideline you can drop into repos / README / engineering docs. It covers security, contracts, error handling, upload flow, job lifecycle, performance and testing, plus small curl examples you can use immediately.
+
+1. Goals / Principles
+	•	Keep mobile payloads small and predictable (sparse fields, pagination).
+	•	Make endpoints idempotent when clients retry (important for mobile networks).
+	•	Push large binary transfers (images, GLTF) to Azure Blob via presigned/SAS URLs — don’t stream big files through the API.
+	•	Keep model inference isolated in a Python model-service (GPU-enabled) that the API calls.
+	•	Provide consistent envelope responses and stable error codes so clients can reliably parse results.
+
+2. Authentication & Authorization
+	•	Use BearerAuth (JWT access tokens) as defined in your OpenAPI components.securitySchemes.
+	•	Token lifecycle:
+	•	Short-lived access token (e.g., 15–60 min).
+	•	Refresh token (longer) if you support persistent sessions. Store refresh tokens securely server-side and use rotation.
+	•	Token validation:
+	•	Validate signature, expiry, issuer, audience, and scopes/claims on every protected endpoint.
+	•	Return 401 for expired/invalid tokens, 403 for insufficient privileges.
+	•	Protect upload creation (POST /uploads) and job creation (POST /jobs) — require BearerAuth.
+
+3. Request / Response envelope & errors
+	•	Use your ApiEnvelope consistently:
+	•	success: true/false, data, error.
+	•	On success: 200 + { success: true, data: <...> }.
+	•	On client error: 4xx + { success: false, error: { code, message } }.
+	•	On server error: 5xx + same error envelope plus an error id (for correlating logs).
+	•	Error object design:
+	•	code: machine-friendly (e.g. INVALID_PAYLOAD, AUTH_EXPIRED, JOB_NOT_FOUND).
+	•	message: human-readable.
+	•	Optionally include details (array) for field-level validation errors — keep this small.
+	•	Use consistent HTTP codes:
+	•	200 OK (success)
+	•	201 Created (optionally for resource creation)
+	•	400 Bad Request (validation)
+	•	401 Unauthorized
+	•	403 Forbidden
+	•	404 Not Found
+	•	429 Too Many Requests (rate limiting)
+	•	500 Internal Server Error
+
+4. Upload flow (presigned / SAS pattern)
+	•	Client POST /uploads with header X-Filename. API validates filename, content-type hint, and creates a blob SAS + final file URL.
+	•	API returns uploadUrl (SAS PUT URL) and fileUrl (public or CDN URL to the file after upload) in UploadImageResponse.
+	•	Client performs a PUT to uploadUrl (direct to Azure Blob). Use Content-Type matching the file.
+	•	Client POST /jobs with imageURL = fileUrl. Server enqueues processing job.
+Implementation details:
+	•	Generate short-lived SAS tokens (e.g., 5–15 minutes) scoped to the exact blob path and method (PUT).
+	•	Use x-ms-blob-type: BlockBlob for blobs.
+	•	Validate file extension and max size server-side when generating SAS (or after successful PUT via blob metadata).
+	•	Optionally, allow clients to upload directly to CDN/Storage with content-md5 or object checksum so server can verify integrity.
+Security:
+	•	Use Azure Managed Identity for server-to-blob operations; only issue SAS tokens from the server (never client-side secrets).
+	•	For public fileUrl, prefer using a CDN (Azure CDN or Front Door) and set appropriate cache headers.
+
+5. Job lifecycle & status model
+	•	Job states: queued → processing → ready | failed.
+	•	Job record fields: id, userId, imageUrl, createdAt, updatedAt, status, progress (0–100), assetId (nullable), errorCode, errorMessage.
+	•	Job creation (POST /jobs) should:
+	•	Validate imageURL domain (only accept storage domains you control, or check signed token).
+	•	Enqueue job to a durable queue (Azure Service Bus, Azure Queue Storage, or message broker).
+	•	Return JobStatusResponse with id and initial status queued.
+	•	Processing:
+	•	Worker pulls job, updates status=processing, writes progress updates.
+	•	When done, upload derived assets to blob (organized under assets/{assetId}/...) and set assetId on job.
+	•	On failure, set status=failed and record errorCode / errorMessage.
+	•	Job polling vs webhooks:
+	•	Mobile: polling GET /jobs/{id} is simple and offline-friendly.
+	•	Optionally provide webhooks or push notifications (for faster UX) — mark the webhook endpoints and allow clients to register callbacks.
+Idempotency:
+	•	Make POST /jobs idempotent if possible: allow a client-provided Idempotency-Key header (or derive by image checksum) so repeated submissions of the same image don't create duplicates.
+
+6. Asset model & serving
+	•	Store generated parts under assets/{assetId}/parts/{partId}.{ext}. Example artifacts: part-geometry.glb, part-texture.jpg, part-metadata.json.
+	•	GET /assets/{id} returns AssetResponse with parts[] (id, name, fileURL). File URLs should be CDN-backed and signed (if private) or public with appropriate TTL.
+	•	For large downloadable 3D files, provide streaming ranges and proper Content-Type (e.g., model/gltf+json, model/gltf-binary for .glb).
+	•	For thumbnails & images, set caching headers (Cache-Control, ETag) to enable CDN caching.
+
+7. Validation & payload size limits
+	•	Validate request bodies with a schema library (pydantic v2, FluentValidation, etc.). Reject extraneous fields or return warnings.
+	•	Enforce size limits:
+	•	X-Filename must be < 255 chars, sanitized.
+	•	Limit image dimensions / byte size (e.g., 20–50 MB) — reject larger images when creating upload SAS, or return a clear error code.
+	•	Use content-type checks for uploaded file PUT operations where possible (match declared extension).
+
+8. Rate limiting, throttling, quotas
+	•	Apply per-user and per-IP rate limits. Example:
+	•	POST /uploads — 10/min per user
+	•	POST /jobs — 5/min per user
+	•	GET /jobs/{id} — 60/min per user
+	•	Use Azure API Management, Front Door, or internal rate-limiter (Redis leaky-bucket) to enforce limits.
+	•	Return 429 with Retry-After header and an error.code like RATE_LIMIT_EXCEEDED.
+
+9. Security & hardening
+	•	Enforce TLS only; HSTS for API domain; use secure headers.
+	•	Validate and sanitize any filename/path inputs to prevent path traversal.
+	•	Scan uploaded files for malware if you expect untrusted uploads.
+	•	Ensure model service is isolated and not publicly exposed — only allow calls from the API via internal network (private VNet).
+	•	Log access and errors, but never log raw image bytes or JWT tokens.
+
+10. Observability & telemetry
+	•	Include a request ID (e.g., X-Request-Id) on every request; echo it in responses. Correlate logs with job ids and request ids.
+	•	Metrics: request latency, error rates, queue length, job processing times, GPU utilization.
+	•	Tracing: instrument API and model-service with distributed tracing (OpenTelemetry → Azure Monitor / App Insights).
+	•	Structured logs (JSON) with fields: timestamp, service, level, requestId, userId, jobId, errorCode.
+
+11. Testing & QA
+	•	Unit tests for controllers/validation.
+	•	Contract tests (OpenAPI-driven) to ensure mobile clients and API stay in sync (use tests to validate example responses).
+	•	Integration tests:
+	•	Mock SAS generation + simulate blob PUT.
+	•	Enqueue job → worker processes → ensure expected files created in blob and DB updated.
+	•	Load tests:
+	•	Simulate typical mobile patterns: uploadRequests (SAS creation), direct blob PUT (not through API), job-create, status-polling. Use wrk/hey or k6. Test with expected payload sizes and concurrency.
+	•	Security tests: JWT handling, rate limits, injection attacks, file size/filename edge cases.
+
+12. OpenAPI / SDK & client generation
+	•	Keep the OpenAPI spec as source-of-truth. Use it to generate typed mobile SDKs:
+	•	Use OpenAPI Generator or Swagger Codegen to generate TypeScript / Swift / Kotlin clients.
+	•	Prefer small, hand-rolled client wrappers that handle envelope parsing (ApiEnvelope) and token refresh rather than exposing raw generated code.
+	•	Pin the OpenAPI version in CI; run contract tests on PRs.
+
+13. Deployment & infra notes (short)
+	•	Model service: run on GPU nodes (AKS GPU nodepool, Azure ML, or dedicated VMs). Keep it separate from public API.
+	•	Public API: deploy to AKS or App Service. Use horizontal scaling behind Load Balancer/Ingress.
+	•	Storage: Azure Blob + CDN; use container naming conventions and lifecycle policies (archive older models).
+	•	Secrets: use Azure Key Vault for keys and rotate them.
+
+14. Performance tuning checklist
+	•	Offload uploads to Blob via SAS (done).
+	•	Cache static content at CDN.
+	•	Use streaming / range requests for large downloads.
+	•	Use batching or throttling for model inference to increase GPU throughput (server-side).
+	•	Return lightweight responses for mobile (avoid full asset lists unless requested).
+
+15. Example usage snippets
+Create upload (get SAS)
+curl -X POST "https://api.rivollo.example/uploads" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Filename: myphoto.jpg"
+# returns uploadUrl and fileUrl in ApiEnvelope.data
+
+Upload file (direct to Azure SAS URL)
+curl -X PUT "$UPLOAD_URL" \
+  -H "x-ms-blob-type: BlockBlob" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @myphoto.jpg
+
+Create job (inference)
+curl -X POST "https://api.rivollo.example/jobs" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"imageURL":"https://cdn.example/blobs/abc/myphoto.jpg"}'
+# returns job id and status
+
+Poll job status
+curl -H "Authorization: Bearer $TOKEN" "https://api.rivollo.example/jobs/<jobId>"
+
+Fetch resulting asset
+curl -H "Authorization: Bearer $TOKEN" "https://api.rivollo.example/assets/<assetId>"
+
+
+16. Developer checklist to ship v0.1
+	•	Enforce JWT validation middleware on protected routes.
+	•	Implement POST /uploads SAS generation (restrict paths & expiry).
+	•	Implement PUT client upload instructions in mobile docs.
+	•	Implement job queue and worker(s) that call model-service and write artifacts to blob storage.
+	•	Implement DB schema for jobs, assets, parts.
+	•	Add rate limiting and X-Request-Id middleware.
+	•	Add OpenAPI-driven client generation and contract tests.
+	•	Add monitoring (traces, metrics) and error tracking (Sentry/App Insights).
+	•	Create mobile SDK wrapper that understands ApiEnvelope and token refresh.
+

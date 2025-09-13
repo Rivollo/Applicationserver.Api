@@ -1,0 +1,317 @@
+openapi: 3.1.0
+info:
+  title: Rivollo Mobile API
+  version: 0.1.0
+  description: |
+    Minimal API surface required for the Rivollo iOS app.
+    Replace the server URL with your real backend host.
+servers:
+  - url: https://api.rivollo.example
+    description: Default server (replace with real)
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          nullable: true
+        error:
+          type: object
+          nullable: true
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+      required: [success]
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required: [email]
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+      required: [token]
+
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+      required: [id, email]
+
+    CreateJobRequest:
+      type: object
+      properties:
+        imageURL:
+          type: string
+          format: uri
+      required: [imageURL]
+
+    JobStatusResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, processing, ready, failed]
+        assetId:
+          type: string
+          nullable: true
+      required: [id, status]
+
+    AssetPart:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        fileURL:
+          type: string
+          format: uri
+      required: [id, name, fileURL]
+
+    AssetResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetPart'
+      required: [id, parts]
+
+    UploadImageResponse:
+      type: object
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+        fileUrl:
+          type: string
+          format: uri
+      required: [uploadUrl, fileUrl]
+
+    BlueprintSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [processing, ready, failed]
+        thumbnailUrl:
+          type: string
+          format: uri
+          nullable: true
+        assetId:
+          type: string
+          nullable: true
+      required: [id, title, status]
+
+paths:
+  /auth/login:
+    post:
+      summary: Login or sign-up by email
+      description: Generates/returns a bearer token for the provided email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/LoginResponse'
+
+  /users/me:
+    get:
+      summary: Get current user
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserResponse'
+        '401': { description: Unauthorized }
+
+  /uploads:
+    post:
+      summary: Create image upload (presigned URL)
+      description: Returns a presigned `uploadUrl` to PUT the image to, and a final `fileUrl` to use in job creation.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: header
+          name: X-Filename
+          required: true
+          schema:
+            type: string
+          description: Original filename including extension (e.g. .jpg)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UploadImageResponse'
+        '401': { description: Unauthorized }
+
+  /jobs:
+    post:
+      summary: Create processing job from uploaded image URL
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/JobStatusResponse'
+        '401': { description: Unauthorized }
+
+  /jobs/{id}:
+    get:
+      summary: Get job status
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/JobStatusResponse'
+        '401': { description: Unauthorized }
+
+  /assets/{id}:
+    get:
+      summary: Get asset parts and files
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AssetResponse'
+        '401': { description: Unauthorized }
+
+  /blueprints:
+    get:
+      summary: List user blueprints
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/BlueprintSummary'
+        '401': { description: Unauthorized }
+
+  /blueprints/{id}:
+    get:
+      summary: Get blueprint summary (optional)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/BlueprintSummary'
+        '401': { description: Unauthorized }
+
+
