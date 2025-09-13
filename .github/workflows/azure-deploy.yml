@@ -6,8 +6,8 @@ on:
       - main
 
 env:
-  AZURE_WEBAPP_NAME: api-service-product             # change if different
-  ACR_LOGIN_SERVER: productbluechip.azurecr.io               # e.g., rivollo.azurecr.io
+  AZURE_WEBAPP_NAME: api-service-product
+  ACR_LOGIN_SERVER: productbluechip.azurecr.io
   IMAGE_NAME: rivollo-dev-api
 
 jobs:
@@ -24,25 +24,27 @@ jobs:
       - name: Login to ACR
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          registry: ${{ env.ACR_LOGIN_SERVER }}
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
       - name: Set tags
         id: tags
         run: |
-          # set numeric tag from GitHub run number
+          # runtime tags
           TAG_NUM="build-${GITHUB_RUN_NUMBER}"
           TAG_LATEST="latest"
 
+          # export for later steps
           echo "TAG_NUM=${TAG_NUM}" >> $GITHUB_ENV
           echo "TAG_LATEST=${TAG_LATEST}" >> $GITHUB_ENV
 
-          # construct full image names using runtime env vars (not ${{ }})
+          # full image names (runtime env variables)
           echo "IMAGE_NUM=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_NUM}" >> $GITHUB_ENV
           echo "IMAGE_LATEST=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_LATEST}" >> $GITHUB_ENV
 
           echo "Using numeric tag: ${TAG_NUM}"
+          echo "IMAGE_NUM set to: ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_NUM}"
 
       - name: Build and push (both numeric and latest)
         uses: docker/build-push-action@v6
@@ -50,22 +52,25 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }}
-            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_LATEST }}
+            ${{ env.IMAGE_NUM }}
+            ${{ env.IMAGE_LATEST }}
 
       - name: Print pushed image digests (traceability)
         run: |
           echo "GIT_COMMIT=${GITHUB_SHA}"
-          docker pull ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }}
+          echo "Pulling numeric tag: ${{ env.IMAGE_NUM }}"
+          docker pull "${{ env.IMAGE_NUM }}"
           echo "Numeric image repo digests:"
-          docker inspect --format='{{index .RepoDigests 0}}' ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }} || true
-          docker pull ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          docker inspect --format='{{index .RepoDigests 0}}' "${{ env.IMAGE_NUM }}" || true
+
+          echo "Pulling latest: ${{ env.IMAGE_LATEST }}"
+          docker pull "${{ env.IMAGE_LATEST }}"
           echo "Latest image repo digests:"
-          docker inspect --format='{{index .RepoDigests 0}}' ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest || true
+          docker inspect --format='{{index .RepoDigests 0}}' "${{ env.IMAGE_LATEST }}" || true
 
       - name: Deploy numeric-tagged image to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          images: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:build-${{ github.run_number }}
+          images: ${{ env.IMAGE_NUM }}
