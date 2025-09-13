@@ -31,12 +31,18 @@ jobs:
       - name: Set tags
         id: tags
         run: |
-          # simple numeric tag using GitHub run number; you can change to any scheme you like
-          echo "TAG_NUM=build-${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
-          echo "TAG_LATEST=latest" >> $GITHUB_ENV
-          echo "IMAGE_NUM=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_NUM }}" >> $GITHUB_ENV
-          echo "IMAGE_LATEST=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.TAG_LATEST }}" >> $GITHUB_ENV
-          echo "Using numeric tag: build-${GITHUB_RUN_NUMBER}"
+          # set numeric tag from GitHub run number
+          TAG_NUM="build-${GITHUB_RUN_NUMBER}"
+          TAG_LATEST="latest"
+
+          echo "TAG_NUM=${TAG_NUM}" >> $GITHUB_ENV
+          echo "TAG_LATEST=${TAG_LATEST}" >> $GITHUB_ENV
+
+          # construct full image names using runtime env vars (not ${{ }})
+          echo "IMAGE_NUM=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_NUM}" >> $GITHUB_ENV
+          echo "IMAGE_LATEST=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_LATEST}" >> $GITHUB_ENV
+
+          echo "Using numeric tag: ${TAG_NUM}"
 
       - name: Build and push (both numeric and latest)
         uses: docker/build-push-action@v6
