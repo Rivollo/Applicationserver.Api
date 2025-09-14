@@ -28,5 +28,10 @@ class Settings(BaseSettings):
 	# External model service endpoint
 	MODEL_SERVICE_URL: str = Field(default="mock://local")
 
+	# Azure Monitor / Application Insights
+	AZURE_MONITOR_CONN_STR: str = Field(default="")
+	ENABLE_APP_INSIGHTS: bool = Field(default=True)
+	SAMPLING_RATIO: float = Field(default=1.0)
+
 
 settings = Settings()
