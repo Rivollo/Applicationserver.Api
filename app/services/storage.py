@@ -2,7 +2,7 @@ import uuid
 import os
 from urllib.parse import quote
 from datetime import datetime, timedelta
-from typing import Optional, BinaryIO
+from typing import Optional, BinaryIO, List, Dict
 
 from app.core.config import settings
 
@@ -102,7 +102,8 @@ class StorageService:
 		key = f"users/{user_id}/blueprints/{blueprint_id}/source/{quote(original_filename)}"
 		return f"{settings.CDN_BASE_URL}/{key}"
 
-	def upload_file_content(self, user_id: str, filename: str, content_type: Optional[str], stream: BinaryIO) -> str:
+	def upload_file_content(self, user_id: str, filename: str, content_type: Optional[str], stream: BinaryIO) -> tuple[str, str]:
+		"""Upload file content and return both CDN URL and blob URL."""
 		client = self._get_blob_service_client()
 		container = settings.STORAGE_CONTAINER_UPLOADS or "uploads"
 		upload_id = str(uuid.uuid4())
@@ -110,17 +111,23 @@ class StorageService:
 		blob_client = client.get_blob_client(container=container, blob=blob_path)
 		settings_obj = ContentSettings(content_type=content_type or "application/octet-stream")  # type: ignore
 		blob_client.upload_blob(stream, overwrite=True, content_settings=settings_obj)
-		return f"{settings.CDN_BASE_URL}/{blob_path}"
+		
+		cdn_url = f"{settings.CDN_BASE_URL}/{blob_path}"
+		blob_url = blob_client.url
+		return cdn_url, blob_url
 
-	def upload_asset_file(self, user_id: str, asset_id: str, file_extension: str, content_type: Optional[str], stream: BinaryIO) -> str:
-		"""Upload asset file to /user/{userid}/model/{assetid}.extension path structure"""
+	def upload_asset_file(self, user_id: str, asset_id: str, file_extension: str, content_type: Optional[str], stream: BinaryIO) -> tuple[str, str]:
+		"""Upload asset file and return both CDN URL and blob URL."""
 		client = self._get_blob_service_client()
 		container = settings.STORAGE_CONTAINER_UPLOADS or "uploads"
 		blob_path = f"users/{user_id}/models/{asset_id}.{file_extension}"
 		blob_client = client.get_blob_client(container=container, blob=blob_path)
 		settings_obj = ContentSettings(content_type=content_type or "application/octet-stream")  # type: ignore
 		blob_client.upload_blob(stream, overwrite=True, content_settings=settings_obj)
-		return f"{settings.CDN_BASE_URL}/{blob_path}"
+		
+		cdn_url = f"{settings.CDN_BASE_URL}/{blob_path}"
+		blob_url = blob_client.url
+		return cdn_url, blob_url
 
 	def download_upload_blob_bytes(self, file_url: str) -> tuple[bytes, Optional[str], str]:
 		"""Download a blob that was previously addressed via CDN_BASE_URL/users/... path.
@@ -149,6 +156,82 @@ class StorageService:
 			pass
 		filename = os.path.basename(blob_path)
 		return content_bytes, content_type, filename
+
+
+	def upload_dual_format_files(self, user_id: str, base_filename: str, files: List[Dict[str, any]]) -> tuple[List[str], List[str], str]:
+		"""Upload multiple files with the same base name but different extensions.
+		
+		Args:
+			user_id: User ID
+			base_filename: Base filename without extension
+			files: List of dicts with 'extension', 'content_type', 'stream' keys
+			
+		Returns:
+			Tuple of (cdn_urls, blob_urls, asset_url_without_extension)
+		"""
+		client = self._get_blob_service_client()
+		container = settings.STORAGE_CONTAINER_UPLOADS or "uploads"
+		upload_id = str(uuid.uuid4())
+		
+		cdn_urls = []
+		blob_urls = []
+		for file_info in files:
+			extension = file_info['extension']
+			content_type = file_info['content_type']
+			stream = file_info['stream']
+			
+			filename = f"{base_filename}.{extension}"
+			blob_path = f"users/{user_id}/uploads/{upload_id}/{quote(filename)}"
+			blob_client = client.get_blob_client(container=container, blob=blob_path)
+			settings_obj = ContentSettings(content_type=content_type or "application/octet-stream")  # type: ignore
+			blob_client.upload_blob(stream, overwrite=True, content_settings=settings_obj)
+			
+			cdn_url = f"{settings.CDN_BASE_URL}/{blob_path}"
+			blob_url = blob_client.url
+			cdn_urls.append(cdn_url)
+			blob_urls.append(blob_url)
+		
+		# Asset URL without extension
+		asset_url_base = f"{settings.CDN_BASE_URL}/users/{user_id}/uploads/{upload_id}/{quote(base_filename)}"
+		
+		return cdn_urls, blob_urls, asset_url_base
+	
+	def upload_dual_asset_files(self, user_id: str, asset_id: str, base_name: str, files: List[Dict[str, any]]) -> tuple[List[str], List[str], str]:
+		"""Upload multiple asset files with the same base name but different extensions.
+		
+		Args:
+			user_id: User ID
+			asset_id: Asset ID
+			base_name: Base name for the files
+			files: List of dicts with 'extension', 'content_type', 'stream' keys
+			
+		Returns:
+			Tuple of (cdn_urls, blob_urls, asset_url_without_extension)
+		"""
+		client = self._get_blob_service_client()
+		container = settings.STORAGE_CONTAINER_UPLOADS or "uploads"
+		
+		cdn_urls = []
+		blob_urls = []
+		for file_info in files:
+			extension = file_info['extension']
+			content_type = file_info['content_type']
+			stream = file_info['stream']
+			
+			blob_path = f"users/{user_id}/models/{asset_id}_{base_name}.{extension}"
+			blob_client = client.get_blob_client(container=container, blob=blob_path)
+			settings_obj = ContentSettings(content_type=content_type or "application/octet-stream")  # type: ignore
+			blob_client.upload_blob(stream, overwrite=True, content_settings=settings_obj)
+			
+			cdn_url = f"{settings.CDN_BASE_URL}/{blob_path}"
+			blob_url = blob_client.url
+			cdn_urls.append(cdn_url)
+			blob_urls.append(blob_url)
+		
+		# Asset URL without extension
+		asset_url_base = f"{settings.CDN_BASE_URL}/users/{user_id}/models/{asset_id}_{base_name}"
+		
+		return cdn_urls, blob_urls, asset_url_base
 
 
 storage_service = StorageService()
