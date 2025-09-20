@@ -1,4 +1,5 @@
 import uuid
+import os
 from urllib.parse import quote
 from datetime import datetime, timedelta
 from typing import Optional, BinaryIO
@@ -110,6 +111,34 @@ class StorageService:
 		settings_obj = ContentSettings(content_type=content_type or "application/octet-stream")  # type: ignore
 		blob_client.upload_blob(stream, overwrite=True, content_settings=settings_obj)
 		return f"{settings.CDN_BASE_URL}/{blob_path}"
+
+	def download_upload_blob_bytes(self, file_url: str) -> tuple[bytes, Optional[str], str]:
+		"""Download a blob that was previously addressed via CDN_BASE_URL/users/... path.
+
+		Returns a tuple of (content_bytes, content_type, filename).
+		Raises RuntimeError if Azure is not configured or the URL doesn't match CDN_BASE_URL.
+		"""
+		base = (settings.CDN_BASE_URL or "").rstrip("/")
+		if not base:
+			raise RuntimeError("CDN_BASE_URL is not configured")
+		prefix = f"{base}/"
+		if not file_url.startswith(prefix):
+			raise RuntimeError("file_url does not match CDN_BASE_URL; cannot infer blob path")
+		blob_path = file_url[len(prefix):]
+		container = settings.STORAGE_CONTAINER_UPLOADS or "uploads"
+
+		client = self._get_blob_service_client()
+		blob_client = client.get_blob_client(container=container, blob=blob_path)
+		downloader = blob_client.download_blob()
+		content_bytes = downloader.readall()
+		content_type: Optional[str] = None
+		try:
+			props = blob_client.get_blob_properties()
+			content_type = getattr(getattr(props, "content_settings", None), "content_type", None)  # type: ignore
+		except Exception:
+			pass
+		filename = os.path.basename(blob_path)
+		return content_bytes, content_type, filename
 
 
 storage_service = StorageService()

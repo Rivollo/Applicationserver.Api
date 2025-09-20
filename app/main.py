@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 import time
 from typing import Optional
+import os
 
 from opentelemetry.trace import get_current_span
 
@@ -22,6 +23,29 @@ app = FastAPI(title=settings.APP_NAME)
 
 # Telemetry / Azure Monitor (optional)
 _logger = logging.getLogger("rivollo.api")
+
+# Ensure we also write logs to a local file `.server.log`
+def _ensure_file_logging() -> None:
+	root_logger = logging.getLogger()
+	server_log_path = os.path.join(os.getcwd(), ".server.log")
+	already_added = False
+	for h in root_logger.handlers:
+		try:
+			base = getattr(h, "baseFilename", None)
+			if base and os.path.abspath(base) == os.path.abspath(server_log_path):
+				already_added = True
+				break
+		except Exception:
+			continue
+	if not already_added:
+		fh = logging.FileHandler(server_log_path, encoding="utf-8")
+		fh.setLevel(logging.INFO)
+		formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+		fh.setFormatter(formatter)
+		root_logger.addHandler(fh)
+		# Make sure INFO logs propagate to file
+		if root_logger.level > logging.INFO or root_logger.level == logging.NOTSET:
+			root_logger.setLevel(logging.INFO)
 try:
 	if settings.ENABLE_APP_INSIGHTS and settings.AZURE_MONITOR_CONN_STR:
 		from azure.monitor.opentelemetry import configure_azure_monitor
@@ -40,6 +64,9 @@ try:
 except Exception as telemetry_exc:
 	# Do not block app startup if telemetry fails
 	logging.getLogger(__name__).warning("Failed to initialize Azure Monitor telemetry: %s", telemetry_exc)
+
+# Initialize file logging regardless of telemetry
+_ensure_file_logging()
 
 # CORS (adjust for real origins later)
 app.add_middleware(
