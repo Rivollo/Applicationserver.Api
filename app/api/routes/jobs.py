@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import Optional
 import uuid
@@ -189,105 +190,45 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 	if job is None:
 		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-	# If we have a provider model job id, try to poll provider status and update our job
-	provider_uid = None
-	try:
-		provider_uid = str(job.modelid) if getattr(job, "modelid", None) else None
-		if not provider_uid:
-			provider_uid = (job.meta or {}).get("modelid") if job.meta else None
-	except Exception:
-		provider_uid = None
-	if provider_uid and job.status in (JobStatusEnum.processing, JobStatusEnum.queued):
-		logger = logging.getLogger(__name__)
-		base = str(settings.MODEL_SERVICE_URL)
-		if base.startswith("http"):
-			base_root = base.rsplit("/", 1)[0]
-		else:
-			base_root = "http://74.225.34.67:8081"
-		status_urls = [
-			f"{base_root}/status/{provider_uid}",
-			f"{base_root}/status?uid={provider_uid}",
-		]
-		resp_json = None
-		with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
-			for u in status_urls:
-				try:
-					resp = client.get(u, headers={"Accept": "application/json"})
-					if resp.status_code < 400:
-						resp_json = resp.json()
-						break
-				except Exception:
-					logger.warning("Provider status request failed for url=%s", u)
-		# Interpret provider response
-		if isinstance(resp_json, dict):
-			provider_status = str(resp_json.get("status", "")).lower()
-			if provider_status in ("ready", "completed", "complete", "succeeded", "success", "done") or resp_json.get("parts"):
-				# Attempt to extract output URLs
-				parts_payload = resp_json.get("parts")
-				parts: list[dict] = []
-				if isinstance(parts_payload, list) and parts_payload:
-					parts = [p for p in parts_payload if isinstance(p, dict)]
-				else:
-					# Try common single-file keys
-					for key in ("fileURL", "url", "download_url", "gltf_url", "glb_url"):
-						val = resp_json.get(key)
-						if isinstance(val, str) and val:
-							parts = [{"id": str(uuid.uuid4()), "name": "model", "fileURL": val}]
-							break
-				if parts:
-					# Create Asset and AssetParts if not already created
-					if not job.asset_id:
-						asset = Asset(
-							title=None,
-							source_image_url=job.image_url,
-							created_from_job=job.id,
-							created_by=job.created_by,
+	# If we have a provider model job id, get status from inference server and return as-is
+	provider_uid = str(job.modelid) if getattr(job, "modelid", None) else None
+	logger = logging.getLogger(__name__)
+	logger.info("GET /jobs/%s: job.modelid=%s, provider_uid=%s", id, getattr(job, "modelid", None), provider_uid)
+	
+	if provider_uid:
+		# Use the exact inference server URL format as specified
+		inference_url = f"http://74.225.34.67:8081/status/{provider_uid}"
+		logger.info("Querying inference server: %s", inference_url)
+		
+		try:
+			with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
+				resp = client.get(inference_url)
+				logger.info("Inference server response: status=%s, content-type=%s", resp.status_code, resp.headers.get("content-type", "unknown"))
+				
+				if resp.status_code < 400:
+					# Check if response is JSON or binary
+					content_type = resp.headers.get("content-type", "").lower()
+					
+					if "application/json" in content_type or "text/" in content_type:
+						# Try to parse as JSON
+						try:
+							return resp.json()
+						except Exception as json_error:
+							logger.warning("Failed to parse response as JSON: %s", str(json_error))
+							# Return raw text if JSON parsing fails
+							return {"raw_response": resp.text}
+					else:
+						# Binary response - return it as-is with proper headers
+						return Response(
+							content=resp.content,
+							media_type=content_type or "application/octet-stream",
+							headers=dict(resp.headers)
 						)
-						db.add(asset)
-						db.flush()
-						position = 0
-						for p in parts:
-							file_url = p.get("fileURL") or p.get("url")
-							name = p.get("name") or "model"
-							stored_url = None
-							if isinstance(file_url, str) and file_url:
-								# Try to download and re-upload to our storage; fallback to provider URL
-								try:
-									with httpx.Client(timeout=httpx.Timeout(60.0)) as client:
-										resp = client.get(file_url)
-										if resp.status_code < 400:
-											content_type = resp.headers.get("content-type", "application/octet-stream")
-											parsed = urlparse(file_url)
-											orig_name = os.path.basename(parsed.path) or f"{name}.bin"
-											uploaded = storage_service.upload_file_content(user_id=user_id, filename=orig_name, content_type=content_type, stream=io.BytesIO(resp.content))
-											stored_url = uploaded
-								except Exception:
-									stored_url = None
-							final_url = stored_url or file_url if isinstance(file_url, str) else None
-							if final_url:
-								ap = AssetPart(asset_id=asset.id, part_name=name, file_url=final_url, position=position)
-								db.add(ap)
-								position += 1
-						job.asset_id = asset.id
-					job.status = JobStatusEnum.ready
-					db.add(job)
-					db.commit()
-			elif provider_status in ("processing", "running", "queued", "pending"):
-				if job.status != JobStatusEnum.processing:
-					job.status = JobStatusEnum.processing
-					db.add(job)
-					db.commit()
-			elif provider_status in ("failed", "error"):
-				job.status = JobStatusEnum.failed
-				job.error_message = resp_json.get("error") or resp_json.get("message")
-				db.add(job)
-				db.commit()
+				else:
+					logger.warning("Inference server returned error status: %s", resp.status_code)
+		except Exception as e:
+			logger.warning("Provider status request failed for url=%s: %s", inference_url, str(e))
 
-	# If still processing, and provider response indicated processing, just return processing
-	file_url_resp: Optional[str] = None
-	if job.asset_id:
-		# Optionally return first part URL as convenience
-		part = db.query(AssetPart).filter(AssetPart.asset_id == job.asset_id).order_by(AssetPart.position.asc()).first()
-		if part:
-			file_url_resp = part.file_url
-	return api_success(JobStatusResponse(id=str(job.id), status=job.status.value, assetId=str(job.asset_id) if job.asset_id else None, fileURL=file_url_resp).model_dump())
+	# If no provider UID or all requests failed, return basic job status as raw JSON
+	logger.info("Returning fallback response for job %s", id)
+	return {"id": str(job.id), "status": job.status.value, "assetId": None, "fileURL": None}
