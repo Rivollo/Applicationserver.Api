@@ -112,6 +112,16 @@ class StorageService:
 		blob_client.upload_blob(stream, overwrite=True, content_settings=settings_obj)
 		return f"{settings.CDN_BASE_URL}/{blob_path}"
 
+	def upload_asset_file(self, user_id: str, asset_id: str, file_extension: str, content_type: Optional[str], stream: BinaryIO) -> str:
+		"""Upload asset file to /user/{userid}/model/{assetid}.extension path structure"""
+		client = self._get_blob_service_client()
+		container = settings.STORAGE_CONTAINER_UPLOADS or "uploads"
+		blob_path = f"users/{user_id}/models/{asset_id}.{file_extension}"
+		blob_client = client.get_blob_client(container=container, blob=blob_path)
+		settings_obj = ContentSettings(content_type=content_type or "application/octet-stream")  # type: ignore
+		blob_client.upload_blob(stream, overwrite=True, content_settings=settings_obj)
+		return f"{settings.CDN_BASE_URL}/{blob_path}"
+
 	def download_upload_blob_bytes(self, file_url: str) -> tuple[bytes, Optional[str], str]:
 		"""Download a blob that was previously addressed via CDN_BASE_URL/users/... path.
 

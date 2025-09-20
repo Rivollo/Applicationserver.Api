@@ -22,6 +22,91 @@ from app.services.storage import storage_service
 router = APIRouter(tags=["jobs"])
 
 
+def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
+	"""Process a completed job by uploading the asset and creating database records"""
+	try:
+		# Create asset record first
+		asset = Asset(
+			title=f"Generated Model - {job.id}",
+			source_image_url=job.image_url,
+			created_from_job=job.id,
+			created_by=user_id
+		)
+		db.add(asset)
+		db.flush()  # Get the asset ID
+		
+		# Determine file extension from content type
+		content_type = resp.headers.get("content-type", "").lower()
+		if "glb" in content_type or "gltf-binary" in content_type:
+			file_extension = "glb"
+			part_name = "model"
+		elif "gltf" in content_type:
+			file_extension = "gltf"
+			part_name = "model"
+		else:
+			file_extension = "glb"  # Default to GLB
+			part_name = "model"
+		
+		# Upload to storage using the new path structure (direct file, no subfolder)
+		asset_stream = io.BytesIO(resp.content)
+		file_url = storage_service.upload_asset_file(
+			user_id=user_id,
+			asset_id=str(asset.id),
+			file_extension=file_extension,
+			content_type=content_type or "model/gltf-binary",
+			stream=asset_stream
+		)
+		
+		# Create asset part record
+		asset_part = AssetPart(
+			asset_id=asset.id,
+			part_name=part_name,
+			file_url=file_url,
+			mime_type=content_type or "model/gltf-binary",
+			size_bytes=len(resp.content),
+			position=0
+		)
+		db.add(asset_part)
+		
+		# Update job with asset_id and status
+		job.asset_id = asset.id
+		job.status = JobStatusEnum.ready
+		db.add(job)
+		
+		# Commit all changes
+		db.commit()
+		db.refresh(asset)
+		db.refresh(asset_part)
+		db.refresh(job)
+		
+		logger.info("Successfully processed completed job %s, created asset %s with streaming URL %s", 
+				   job.id, asset.id, file_url)
+		
+		# Return the job status with asset information
+		return api_success({
+			"id": str(job.id),
+			"status": job.status.value,
+			"assetId": str(asset.id),
+			"fileURL": file_url
+		})
+		
+	except Exception as ex:
+		logger.exception("Failed to process completed job %s", job.id)
+		# Mark job as failed
+		try:
+			job.status = JobStatusEnum.failed
+			job.error_message = "Failed to process completed asset"
+			db.add(job)
+			db.commit()
+		except Exception:
+			logger.exception("Failed to mark job as failed")
+		
+		raise HTTPException(
+			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+			detail="Failed to process completed asset"
+		) from ex
+
+
 @router.post("/jobs")
 def create_job(payload: CreateJobRequest, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     logger = logging.getLogger(__name__)
@@ -218,17 +303,32 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 							# Return raw text if JSON parsing fails
 							return {"raw_response": resp.text}
 					else:
-						# Binary response - return it as-is with proper headers
-						return Response(
-							content=resp.content,
-							media_type=content_type or "application/octet-stream",
-							headers=dict(resp.headers)
-						)
+						# Binary response - this means the job is completed, process the asset
+						logger.info("Received binary response, processing completed asset for job %s", job.id)
+						return _process_completed_job(job, resp, user_id, db, logger)
 				else:
 					logger.warning("Inference server returned error status: %s", resp.status_code)
 		except Exception as e:
 			logger.warning("Provider status request failed for url=%s: %s", inference_url, str(e))
 
-	# If no provider UID or all requests failed, return basic job status as raw JSON
+	# If no provider UID or all requests failed, return basic job status
 	logger.info("Returning fallback response for job %s", id)
-	return {"id": str(job.id), "status": job.status.value, "assetId": None, "fileURL": None}
+	
+	# If job has an asset_id, get the asset information
+	asset_id = None
+	file_url = None
+	if job.asset_id:
+		asset = db.query(Asset).filter(Asset.id == job.asset_id).first()
+		if asset:
+			asset_id = str(asset.id)
+			# Get the first asset part URL
+			asset_part = db.query(AssetPart).filter(AssetPart.asset_id == asset.id).first()
+			if asset_part:
+				file_url = asset_part.file_url
+	
+	return api_success({
+		"id": str(job.id), 
+		"status": job.status.value, 
+		"assetId": asset_id, 
+		"fileURL": file_url
+	})
