@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from app.api.deps import get_current_user_id
 from app.core.db import get_db
@@ -15,12 +14,11 @@ router = APIRouter(tags=["uploads"])
 
 @router.post("/uploads")
 def create_upload(
-	payload: Optional[UploadInitRequest] = None,
-	filename_header: Optional[str] = Header(None, alias="X-Filename"),
+	payload: UploadInitRequest,
 	user_id: str = Depends(get_current_user_id),
 	db: Session = Depends(get_db),
 ):
-	filename = filename_header or (payload.filename if payload else None)
+	filename = payload.filename
 	if not filename or "." not in filename or len(filename) > 255:
 		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
 	upload_url, file_url = storage_service.create_presigned_upload(user_id=user_id, filename=filename)
