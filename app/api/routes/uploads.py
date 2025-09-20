@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id
 from app.core.db import get_db
-from app.models.models import Upload
+from app.models.models import Upload, Job
 from app.schemas.jobs import UploadImageResponse
 from app.schemas.uploads import UploadInitRequest, UploadContentResponse
 from app.services.storage import storage_service
@@ -24,6 +24,31 @@ def create_upload(
 	upload_url, file_url = storage_service.create_presigned_upload(user_id=user_id, filename=filename)
 	rec = Upload(filename=filename, upload_url=upload_url, file_url=file_url, created_by=user_id)
 	db.add(rec)
+
+	# If jobId is provided, and a modelId is provided, persist modelId on the job (both column and meta)
+	if getattr(payload, "jobId", None):
+		try:
+			job_uuid = uuid.UUID(payload.jobId)
+		except Exception:
+			job_uuid = None
+		if job_uuid is not None:
+			job = db.query(Job).filter(Job.id == job_uuid, Job.created_by == user_id).one_or_none()
+			if job is not None and getattr(payload, "modelId", None):
+				meta = dict(job.meta or {})
+				model_uuid = uuid.UUID(str(payload.modelId))
+				try:
+					job.modelid = model_uuid
+					logging.getLogger(__name__).info("uploads: set job.modelid=%s for job.id=%s", job.modelid, job.id)
+				except Exception:
+					logging.getLogger(__name__).exception("uploads: failed setting job.modelid for job.id=%s", job.id)
+				meta["modelid"] = str(model_uuid)
+				job.meta = meta
+				db.add(job)
+				# Best-effort commit of job update
+				try:
+					db.commit()
+				except Exception:
+					pass
 	db.commit()
 	return api_success(UploadImageResponse(uploadUrl=upload_url, fileUrl=file_url).model_dump())
 

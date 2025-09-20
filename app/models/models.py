@@ -51,6 +51,7 @@ class Job(Base):
 
 	id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 	image_url = Column(Text, nullable=False)
+	modelid = Column(UUID(as_uuid=True))
 	status = Column(Enum(JobStatusEnum), nullable=False, default=JobStatusEnum.queued)
 	asset_id = Column(UUID(as_uuid=True))
 	error_message = Column(Text)

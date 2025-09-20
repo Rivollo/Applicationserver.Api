@@ -10,6 +10,14 @@ class JobStatusResponse(BaseModel):
 	id: str
 	status: str
 	assetId: Optional[str] = None
+	fileURL: Optional[HttpUrl] = None
+
+
+class CreateJobResponse(BaseModel):
+    jobId: str
+    modelJobId: str
+    status: str
+    assetId: Optional[str] = None
 
 
 class UploadImageResponse(BaseModel):
