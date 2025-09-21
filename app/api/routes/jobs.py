@@ -51,7 +51,7 @@ def debug_inference_endpoint(provider_uid: str):
 	logger.info("Testing inference server URL: %s", inference_url)
 	
 	try:
-		with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
+		with httpx.Client(timeout=httpx.Timeout(200.0)) as client:
 			resp = client.get(inference_url)
 			logger.info("Raw inference response: status=%s, headers=%s", resp.status_code, dict(resp.headers))
 			logger.info("Raw inference response body (first 1000 chars): %s", resp.text[:1000])
@@ -340,7 +340,7 @@ def create_job(payload: CreateJobRequest, user_id: str = Depends(get_current_use
             image_bytes, ct, filename = storage_service.download_upload_blob_bytes(image_url)
             content_type = ct or "application/octet-stream"
         else:
-            with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
+            with httpx.Client(timeout=httpx.Timeout(200.0)) as client:
                 resp = client.get(image_url)
                 if resp.status_code != 200:
                     logger.warning("Failed to download image: status=%s url=%s", resp.status_code, image_url)
@@ -409,7 +409,7 @@ def create_job(payload: CreateJobRequest, user_id: str = Depends(get_current_use
     )
 
     try:
-        with httpx.Client(timeout=httpx.Timeout(120.0)) as client:
+        with httpx.Client(timeout=httpx.Timeout(200.0)) as client:
             with open(local_path, "rb") as f:
                 files = {"image": (filename, f, content_type)}
                 req = client.build_request(
@@ -495,7 +495,7 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 		logger.info("=== QUERYING INFERENCE SERVER: %s ===", inference_url)
 		
 		try:
-			with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
+			with httpx.Client(timeout=httpx.Timeout(200.0)) as client:
 				logger.info("Sending GET request to inference server...")
 				resp = client.get(inference_url)
 				logger.info("Inference server response: status=%s, content-type=%s, content-length=%s", 

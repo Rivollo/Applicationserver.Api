@@ -64,7 +64,7 @@ class ModelConverter:
                     '/Applications/Reality Converter.app/Contents/MacOS/Reality Converter',
                     str(glb_path),
                     str(usdz_path)
-                ], capture_output=True, text=True, timeout=120)
+                ], capture_output=True, text=True, timeout=200)
                 
                 if result.returncode != 0:
                     raise RuntimeError(f"Reality Converter failed: {result.stderr}")
@@ -218,7 +218,7 @@ class ModelConverter:
             # Try using usdzip if available
             result = subprocess.run([
                 'usdzip', usdz_path, usd_path
-            ], capture_output=True, text=True, timeout=60)
+            ], capture_output=True, text=True, timeout=200)
             
             if result.returncode == 0:
                 logger.info("Successfully converted USD to USDZ using usdzip")
