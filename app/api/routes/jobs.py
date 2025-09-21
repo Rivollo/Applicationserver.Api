@@ -199,13 +199,13 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 					job.id, asset.id, glb_url, usdz_url
 				)
 				
-				# Return the job status with both file URLs
+				# Return the job status with blob URLs instead of CDN URLs
 				return api_success({
 					"id": str(job.id),
 					"status": job.status.value,
 					"assetId": str(asset.id),
-					"glburl": glb_url,
-					"usdzURL": usdz_url,
+					"glburl": glb_blob_url,
+					"usdzURL": usdz_blob_url,
 					"conversionStatus": {
 						"usdz": {
 							"attempted": True,
@@ -264,12 +264,12 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 					job.id, file_url
 				)
 				
-				# Return the job status with GLB file URL and conversion failure info
+				# Return the job status with blob URL and conversion failure info
 				return api_success({
 					"id": str(job.id),
 					"status": job.status.value,
 					"assetId": str(asset.id),
-					"glburl": file_url,
+					"glburl": blob_url,
 					"usdzURL": None,
 					"conversionStatus": {
 						"usdz": {
@@ -319,12 +319,12 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 			logger.info("Successfully processed completed job %s, created asset %s with streaming URL %s", 
 					   job.id, asset.id, file_url)
 			
-			# Return the job status with asset information
+			# Return the job status with blob URL instead of CDN URL
 			return api_success({
 				"id": str(job.id),
 				"status": job.status.value,
 				"assetId": str(asset.id),
-				"glburl": file_url,
+				"glburl": blob_url,
 				"usdzURL": None
 			})
 		
@@ -648,12 +648,16 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 			has_multiple_formats = len(formats) > 1
 			logger.info("Asset %s has formats: %s", asset_id, list(formats.keys()))
 	
+	# Use blob URLs if available, otherwise fall back to CDN URLs
+	glb_response_url = blob_urls.get("glb", file_url)
+	usdz_response_url = blob_urls.get("usdz", usdz_url)
+	
 	response_data = {
 		"id": str(job.id), 
 		"status": job.status.value, 
 		"assetId": asset_id, 
-		"glburl": file_url,
-		"usdzURL": usdz_url
+		"glburl": glb_response_url,
+		"usdzURL": usdz_response_url
 	}
 	
 	logger.info("=== FINAL FALLBACK RESPONSE DATA: %s ===", response_data)
