@@ -12,6 +12,7 @@ email-validator==2.1.0.post1
 python-multipart==0.0.9
 gunicorn==21.2.0
 azure-monitor-opentelemetry>=1.5.0,<2.0.0
+opentelemetry-instrumentation-logging>=0.58b0
 
 # For GLB to USDZ conversion
 usd-core>=23.11
