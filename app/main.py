@@ -55,6 +55,7 @@ try:
 		configure_azure_monitor(
 			connection_string=settings.AZURE_MONITOR_CONN_STR,
 			sampling_ratio=settings.SAMPLING_RATIO,
+			enable_live_metrics=True,
 		)
 		# Include trace/span ids in stdlib logging records
 		LoggingInstrumentor().instrument(set_logging_format=True)
