@@ -205,7 +205,14 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 					"status": job.status.value,
 					"assetId": str(asset.id),
 					"glburl": glb_url,
-					"usdzURL": usdz_url
+					"usdzURL": usdz_url,
+					"conversionStatus": {
+						"usdz": {
+							"attempted": True,
+							"successful": True,
+							"error": None
+						}
+					}
 				})
 				
 			except Exception as e:
@@ -240,6 +247,38 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 					}
 				)
 				db.add(asset_part)
+				
+				# Update job with asset_id and status (for failed conversion fallback)
+				job.asset_id = asset.id
+				job.status = JobStatusEnum.ready
+				db.add(job)
+				
+				# Commit all changes
+				db.commit()
+				db.refresh(asset)
+				db.refresh(asset_part)
+				db.refresh(job)
+				
+				logger.info(
+					"Successfully processed job %s with GLB fallback (USDZ conversion failed). GLB URL: %s",
+					job.id, file_url
+				)
+				
+				# Return the job status with GLB file URL and conversion failure info
+				return api_success({
+					"id": str(job.id),
+					"status": job.status.value,
+					"assetId": str(asset.id),
+					"glburl": file_url,
+					"usdzURL": None,
+					"conversionStatus": {
+						"usdz": {
+							"attempted": True,
+							"successful": False,
+							"error": str(e)
+						}
+					}
+				})
 		else:
 			# Handle non-GLB files normally (GLTF, etc.)
 			asset_stream = io.BytesIO(resp.content)

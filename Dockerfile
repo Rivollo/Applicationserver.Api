@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && apt-get purge -y --auto-remove build-essential gcc \
   && rm -rf /var/lib/apt/lists/*
 
+# Verify USD command-line tools are available after installation
+RUN python -c "import pxr; print('USD Python bindings available')" || echo "USD Python bindings not available"
+RUN which usdzip || echo "usdzip command not found - will use manual fallback"
+
 # Copy application code
 COPY . .
 

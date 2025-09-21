@@ -195,26 +195,29 @@ class ModelConverter:
     
     def _convert_usd_to_usdz(self, usd_path: str, usdz_path: str):
         """Convert USD file to USDZ format."""
-        try:
-            # Method 1: Use USD Python API
-            stage = Usd.Stage.Open(usd_path)
-            if stage:
-                stage.Export(usdz_path)
-                logger.info(f"Converted USD to USDZ: {usdz_path}")
-                return
-        except Exception as e:
-            logger.error(f"USD Python API conversion failed: {e}")
-        
-        # Method 2: Try using command line tools if available
+        # USD Python API does not support direct USDZ export via stage.Export()
+        # We must use the command line tools (usdzip) for proper USDZ creation
         try:
             self._convert_usd_to_usdz_cli(usd_path, usdz_path)
         except Exception as e:
             logger.error(f"CLI conversion failed: {e}")
-            raise RuntimeError("Failed to convert USD to USDZ")
+            # Fallback: Try creating a simple zip-based USDZ manually
+            try:
+                self._create_usdz_manually(usd_path, usdz_path)
+            except Exception as fallback_e:
+                logger.error(f"Manual USDZ creation failed: {fallback_e}")
+                raise RuntimeError(f"Failed to convert USD to USDZ: CLI failed ({e}), Manual fallback failed ({fallback_e})")
     
     def _convert_usd_to_usdz_cli(self, usd_path: str, usdz_path: str):
         """Convert USD to USDZ using command line tools."""
         try:
+            # Check if usdzip is available
+            check_result = subprocess.run(['which', 'usdzip'], capture_output=True, text=True)
+            if check_result.returncode != 0:
+                raise FileNotFoundError("usdzip command not found in PATH")
+            
+            logger.info(f"Using usdzip to convert {usd_path} to {usdz_path}")
+            
             # Try using usdzip if available
             result = subprocess.run([
                 'usdzip', usdz_path, usd_path
@@ -222,11 +225,54 @@ class ModelConverter:
             
             if result.returncode == 0:
                 logger.info("Successfully converted USD to USDZ using usdzip")
+                if result.stdout:
+                    logger.debug(f"usdzip output: {result.stdout}")
             else:
-                raise RuntimeError(f"usdzip failed: {result.stderr}")
+                error_msg = f"usdzip failed with return code {result.returncode}"
+                if result.stderr:
+                    error_msg += f": {result.stderr}"
+                if result.stdout:
+                    error_msg += f" (stdout: {result.stdout})"
+                raise RuntimeError(error_msg)
                 
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            logger.warning(f"usdzip command failed: {e}")
             raise RuntimeError(f"usdzip command failed: {e}")
+    
+    def _create_usdz_manually(self, usd_path: str, usdz_path: str):
+        """Create USDZ file manually using zip compression."""
+        import zipfile
+        import shutil
+        from pathlib import Path
+        
+        try:
+            # USDZ is essentially a ZIP file with specific structure
+            # Create a temporary directory for the USDZ contents
+            temp_dir = Path(usd_path).parent / "usdz_temp"
+            temp_dir.mkdir(exist_ok=True)
+            
+            # Copy the USD file to the temp directory
+            usd_filename = Path(usd_path).name
+            temp_usd_path = temp_dir / usd_filename
+            shutil.copy2(usd_path, temp_usd_path)
+            
+            # Create the USDZ file as a ZIP archive
+            with zipfile.ZipFile(usdz_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add the USD file to the root of the archive
+                zipf.write(temp_usd_path, usd_filename)
+                
+                # Copy any referenced assets if they exist
+                # This is a simplified approach - in production you'd want to parse
+                # the USD file for asset references and include them
+                
+            # Clean up temp directory
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+            logger.info(f"Manually created USDZ file: {usdz_path}")
+            
+        except Exception as e:
+            logger.error(f"Manual USDZ creation failed: {e}")
+            raise
     
     def convert_glb_to_usdz(self, glb_stream: BinaryIO, filename: str = "model.glb") -> Tuple[bytes, str]:
         """

@@ -162,7 +162,14 @@ async def upload_content(
 					"usdz": usdz_blob_url
 				},
 				"assetUrl": asset_url_base,  # Asset URL without extension
-				"hasMultipleFormats": True
+				"hasMultipleFormats": True,
+				"conversionStatus": {
+					"usdz": {
+						"attempted": True,
+						"successful": True,
+						"error": None
+					}
+				}
 			})
 			
 		except Exception as e:
@@ -189,13 +196,34 @@ async def upload_content(
 					"conversion_attempted": True,
 					"conversion_failed": True,
 					"conversion_error": str(e),
-					"blob_url": blob_url
+					"blob_url": blob_url,
+					"original_filename": original_filename
 				}
 			)
 			db.add(rec)
 			db.commit()
 			
-			return api_success(UploadContentResponse(fileUrl=file_url, blobUrl=blob_url).model_dump())
+			logger.info(
+				"Successfully uploaded GLB file %s with conversion fallback for user %s. GLB URL: %s",
+				original_filename, user_id, file_url
+			)
+			
+			# Return response with conversion failure information
+			return api_success({
+				"fileUrl": file_url,
+				"blobUrl": blob_url,
+				"formats": {
+					"glb": file_url
+				},
+				"hasMultipleFormats": False,
+				"conversionStatus": {
+					"usdz": {
+						"attempted": True,
+						"successful": False,
+						"error": str(e)
+					}
+				}
+			})
 	else:
 		# Handle non-GLB files normally
 		file_url, blob_url = storage_service.upload_file_content(
