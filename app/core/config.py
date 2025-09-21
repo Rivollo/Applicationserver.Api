@@ -33,5 +33,12 @@ class Settings(BaseSettings):
 	ENABLE_APP_INSIGHTS: bool = Field(default=True)
 	SAMPLING_RATIO: float = Field(default=1.0)
 
+	# Timeouts (seconds)
+	HTTP_TIMEOUT_DEFAULT: float = Field(default=200.0)
+	HTTP_TIMEOUT_INFERENCE_POST: float = Field(default=200.0)
+	HTTP_TIMEOUT_INFERENCE_STATUS: float = Field(default=200.0)
+	MODEL_CONVERSION_TIMEOUT: float = Field(default=200.0)
+	USDZIP_TIMEOUT: float = Field(default=200.0)
+
 
 settings = Settings()
