@@ -10,7 +10,8 @@ class JobStatusResponse(BaseModel):
 	id: str
 	status: str
 	assetId: Optional[str] = None
-	fileURL: Optional[HttpUrl] = None
+	glburl: Optional[HttpUrl] = None
+	usdzURL: Optional[HttpUrl] = None
 
 
 class CreateJobResponse(BaseModel):

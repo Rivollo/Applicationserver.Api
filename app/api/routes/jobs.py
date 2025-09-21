@@ -204,18 +204,8 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 					"id": str(job.id),
 					"status": job.status.value,
 					"assetId": str(asset.id),
-					"fileURL": glb_url,  # Primary GLB file URL for backward compatibility
-					"usdzURL": usdz_url,  # USDZ file URL for AR viewing
-					"formats": {
-						"glb": glb_url,
-						"usdz": usdz_url
-					},
-					"blobUrls": {
-						"glb": glb_blob_url,
-						"usdz": usdz_blob_url
-					},
-					"assetUrl": asset_url_base,  # Asset URL without extension
-					"hasMultipleFormats": True
+					"glburl": glb_url,
+					"usdzURL": usdz_url
 				})
 				
 			except Exception as e:
@@ -295,7 +285,8 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 				"id": str(job.id),
 				"status": job.status.value,
 				"assetId": str(asset.id),
-				"fileURL": file_url
+				"glburl": file_url,
+				"usdzURL": None
 			})
 		
 	except Exception as ex:
@@ -622,22 +613,9 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 		"id": str(job.id), 
 		"status": job.status.value, 
 		"assetId": asset_id, 
-		"fileURL": file_url
+		"glburl": file_url,
+		"usdzURL": usdz_url
 	}
-	
-	# Add additional URLs if available
-	if usdz_url:
-		response_data["usdzURL"] = usdz_url
-	
-	if has_multiple_formats:
-		response_data["formats"] = formats
-		response_data["hasMultipleFormats"] = True
-	
-	if blob_urls:
-		response_data["blobUrls"] = blob_urls
-	
-	if asset_url:
-		response_data["assetUrl"] = asset_url
 	
 	logger.info("=== FINAL FALLBACK RESPONSE DATA: %s ===", response_data)
 	
