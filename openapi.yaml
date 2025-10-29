@@ -1,0 +1,3296 @@
+openapi: 3.0.3
+info:
+  title: Rivollo 3D Product Platform API
+  version: 1.0.0
+  description: |
+    RESTful API for the Rivollo 3D product visualization platform.
+    Transforms flat product photos into interactive 3D models with AI processing.
+
+    **Key Features:**
+    - JWT-based authentication with bearer tokens
+    - Uniform response envelope pattern for all endpoints
+    - Subscription-based plan limits (Free, Pro, Enterprise)
+    - Real-time job processing status tracking
+    - Product and gallery management
+
+    **Response Envelope:**
+    All responses follow a uniform envelope structure:
+    ```json
+    {
+      "success": true|false,
+      "message": "Human-readable message",
+      "data": <entity-or-object>
+    }
+    ```
+  contact:
+    name: Rivollo API Support
+    email: support@rivollo.com
+  license:
+    name: Proprietary
+    url: https://rivollo.com/terms
+
+servers:
+  - url: http://localhost:3000/api
+    description: Local development server
+  - url: https://api-service-product.azurewebsites.net
+    description: Production API server
+
+tags:
+  - name: Health
+    description: Health check and system status
+  - name: Auth
+    description: Authentication and user management
+  - name: Products
+    description: Product management and 3D model operations
+  - name: Galleries
+    description: Gallery curation and management
+  - name: Analytics
+    description: Engagement and conversion analytics
+  - name: Subscriptions
+    description: Plan management and usage tracking
+  - name: Branding
+    description: Organization branding settings
+  - name: Search
+    description: Global search across products and galleries
+  - name: Jobs
+    description: AI processing job management
+  - name: Uploads
+    description: File upload operations
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token obtained from login or signup endpoints.
+        Token expires after 24 hours and must be refreshed.
+
+  parameters:
+    page:
+      name: page
+      in: query
+      description: Page number for pagination (1-indexed)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      x-business-rules:
+        - Must be a positive integer starting from 1
+
+    limit:
+      name: limit
+      in: query
+      description: Number of items per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      x-business-rules:
+        - Maximum page size is 100 to prevent performance issues
+        - Default is 20 items per page
+
+    pageSize:
+      name: pageSize
+      in: query
+      description: Alias for limit parameter
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      x-business-rules:
+        - Maximum page size is 100 to prevent performance issues
+        - Default is 20 items per page
+
+    q:
+      name: q
+      in: query
+      description: Search query string (case-insensitive)
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+      x-business-rules:
+        - Searches across name, description, and tags fields
+        - Case-insensitive matching
+        - Minimum 1 character required
+
+    sort:
+      name: sort
+      in: query
+      description: Sort field and direction (e.g., 'name', '-createdAt')
+      schema:
+        type: string
+        enum:
+          - name
+          - -name
+          - createdAt
+          - -createdAt
+          - updatedAt
+          - -updatedAt
+        default: -createdAt
+      x-business-rules:
+        - Prefix with '-' for descending order
+        - Default sort is by newest first (-createdAt)
+
+    fields:
+      name: fields
+      in: query
+      description: Comma-separated list of fields to include in response
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9,_]+$'
+      example: 'id,name,status'
+      x-business-rules:
+        - Only specified fields will be returned
+        - Invalid fields are silently ignored
+        - ID field is always included
+
+    include:
+      name: include
+      in: query
+      description: Comma-separated list of related resources to include
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9,_]+$'
+      example: 'tags'
+      x-business-rules:
+        - Related resources are embedded in the response
+        - Invalid includes are silently ignored
+
+  schemas:
+    # ===========================
+    # RESPONSE ENVELOPE SCHEMAS
+    # ===========================
+
+    Envelope:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          description: Indicates if the operation was successful
+        message:
+          type: string
+          description: Human-readable message about the operation result
+        data:
+          description: Response payload (type varies by endpoint)
+          nullable: true
+      x-business-rules:
+        - All API responses use this envelope structure
+        - data is null when success is false
+        - message provides context for both success and error cases
+
+    Error:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+          description: Always false for errors
+        message:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Machine-readable error code
+          example: VALIDATION_ERROR
+        details:
+          type: object
+          description: Additional error details (e.g., validation errors)
+          additionalProperties: true
+      x-business-rules:
+        - HTTP status codes indicate error type (400, 401, 403, 404, 409, 500)
+        - code field provides granular error classification
+        - details contains field-level validation errors when applicable
+
+    PageMeta:
+      type: object
+      required:
+        - page
+        - pageSize
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          description: Current page number (1-indexed)
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Number of items per page
+        total:
+          type: integer
+          minimum: 0
+          description: Total number of items across all pages
+        totalPages:
+          type: integer
+          minimum: 0
+          description: Total number of pages
+      x-business-rules:
+        - totalPages is calculated as ceil(total / pageSize)
+        - Empty result sets have page=1, total=0, totalPages=0
+
+    # ===========================
+    # AUTHENTICATION SCHEMAS
+    # ===========================
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+          example: SecurePass123!
+        rememberMe:
+          type: boolean
+          default: false
+          description: Extend token lifetime to 30 days
+      x-business-rules:
+        - Email must be registered in the system
+        - Password is case-sensitive
+        - Failed login attempts are rate-limited (5 attempts per 15 minutes)
+        - rememberMe extends token from 24 hours to 30 days
+
+    SignupRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          example: newuser@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+          example: SecurePass123!
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: John Doe
+        rememberMe:
+          type: boolean
+          default: false
+      x-business-rules:
+        - Email must be unique (returns 409 if already exists)
+        - Password must contain at least one uppercase, lowercase, number
+        - Name is optional; derived from email if not provided
+        - New users start on Free plan with 7-day Pro trial
+        - Account is immediately active (no email verification required)
+
+    GoogleAuthRequest:
+      type: object
+      required:
+        - credential
+      properties:
+        credential:
+          type: string
+          description: Google OAuth credential token from Google Sign-In
+          minLength: 1
+        rememberMe:
+          type: boolean
+          default: false
+      x-business-rules:
+        - Credential must be a valid Google OAuth token
+        - Email is extracted from Google token
+        - New users are auto-created if email doesn't exist
+        - Existing users are logged in
+
+    AuthResponse:
+      type: object
+      required:
+        - user
+        - token
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+          description: JWT bearer token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        expiresAt:
+          type: string
+          format: date-time
+          description: Token expiration timestamp (ISO 8601)
+          example: '2025-10-30T12:00:00Z'
+      x-business-rules:
+        - Token expires after 24 hours (or 30 days with rememberMe)
+        - Token contains user ID and plan information
+        - Client must include token in Authorization header for protected endpoints
+
+    User:
+      type: object
+      required:
+        - id
+        - email
+      properties:
+        id:
+          type: string
+          pattern: '^user-[a-z0-9-]+$'
+          description: Unique user identifier
+          example: user-abc123
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        name:
+          type: string
+          nullable: true
+          example: John Doe
+        firstName:
+          type: string
+          nullable: true
+          example: John
+        lastName:
+          type: string
+          nullable: true
+          example: Doe
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+          example: https://example.com/avatars/user123.jpg
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2025-10-01T10:00:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2025-10-15T14:30:00Z'
+      x-business-rules:
+        - ID is auto-generated with 'user-' prefix
+        - Email is immutable after creation
+        - name, firstName, lastName can be updated via PATCH /users/me
+        - avatarUrl must be a valid HTTPS URL
+        - createdAt and updatedAt are server-managed
+
+    # ===========================
+    # PRODUCT SCHEMAS
+    # ===========================
+
+    Product:
+      type: object
+      required:
+        - id
+        - name
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^prod-[a-z0-9-]+$'
+          description: Unique product identifier
+          example: prod-neo-headphones
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: NeoWave Wireless Headphones
+        description:
+          type: string
+          maxLength: 2000
+          nullable: true
+          example: Spatial audio with adaptive noise control
+        brand:
+          type: string
+          maxLength: 100
+          nullable: true
+          example: Neowave Labs
+        accentColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          description: Primary accent color (hex)
+          example: '#2563EB'
+        accentOverlay:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          nullable: true
+          description: Secondary overlay color (hex)
+          example: '#1E40AF'
+        status:
+          type: string
+          enum:
+            - ready
+            - processing
+            - error
+          description: Processing status of the 3D model
+          example: ready
+        readyMetric:
+          type: string
+          nullable: true
+          description: Export quality metric (only when status is ready)
+          example: 98% match
+        processingProgress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Processing completion percentage (only when status is processing)
+          example: 42
+        failureReason:
+          type: string
+          nullable: true
+          description: Error message (only when status is error)
+          example: Material bake timed out
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+          default: []
+          example: ['audio', 'electronics']
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2025-02-03T09:15:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2025-02-04T05:42:00Z'
+        configurator:
+          $ref: '#/components/schemas/ConfiguratorSettings'
+          description: Latest saved configurator settings for the product.
+          nullable: true
+      x-business-rules:
+        - ID is auto-generated with 'prod-' prefix
+        - name must be unique per user
+        - status transitions: processing → ready|error (one-way)
+        - processingProgress only set when status is 'processing'
+        - readyMetric only set when status is 'ready'
+        - failureReason only set when status is 'error'
+        - tags are searchable and case-insensitive
+        - Product count per user limited by subscription plan
+        - Free plan max 2 products, Pro plan max 50, Enterprise unlimited
+
+    ProductCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        brand:
+          type: string
+          maxLength: 100
+        accentColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          default: '#2563EB'
+        accentOverlay:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+      x-business-rules:
+        - Initial status is always 'processing'
+        - createdAt and updatedAt set by server
+        - ID generated by server
+
+    ProductUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        brand:
+          type: string
+          maxLength: 100
+        accentColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        accentOverlay:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+      x-business-rules:
+        - All fields are optional (partial update)
+        - status, id, createdAt, updatedAt are immutable
+        - updatedAt is automatically updated on change
+        - Returns 404 if product doesn't exist or doesn't belong to user
+
+    ProductList:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    # ===========================
+    # GALLERY SCHEMAS
+    # ===========================
+
+    Gallery:
+      type: object
+      required:
+        - id
+        - name
+        - status
+        - productCount
+        - assetCount
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^gallery-[a-z0-9-]+$'
+          example: gallery-1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Holiday Launch Lookbook
+        description:
+          type: string
+          maxLength: 2000
+          nullable: true
+          example: Premium holiday assortment with lifestyle scenes
+        thumbnailColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          nullable: true
+          example: '#D97706'
+        thumbnailOverlay:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          nullable: true
+          example: '#B45309'
+        productCount:
+          type: integer
+          minimum: 0
+          readOnly: true
+          example: 12
+        assetCount:
+          type: integer
+          minimum: 0
+          readOnly: true
+          example: 46
+        status:
+          type: string
+          enum:
+            - ready
+            - processing
+          example: ready
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+          default: []
+          example: ['Holiday', 'Lifestyle']
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2025-09-15T09:12:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2025-10-02T09:12:00Z'
+      x-business-rules:
+        - ID is auto-generated with 'gallery-' prefix
+        - name must be unique per user
+        - productCount and assetCount are auto-calculated
+        - Gallery access is plan-dependent (Free plan has no access)
+        - Pro plan limited to 10 galleries, Enterprise unlimited
+        - status=processing when products are being added/removed
+        - Deleting gallery does not delete products
+
+    GalleryCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        thumbnailColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        thumbnailOverlay:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+      x-business-rules:
+        - Requires Pro or Enterprise plan
+        - Initial status is 'ready'
+        - productCount and assetCount start at 0
+
+    GalleryUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        thumbnailColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        thumbnailOverlay:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+      x-business-rules:
+        - All fields are optional
+        - productCount and assetCount are read-only
+
+    GalleryList:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Gallery'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    # ===========================
+    # ANALYTICS SCHEMAS
+    # ===========================
+
+    AnalyticsOverview:
+      type: object
+      required:
+        - plan
+        - kpis
+        - charts
+        - capabilities
+      properties:
+        plan:
+          type: string
+          enum:
+            - basic
+            - premium
+          description: Analytics plan tier (based on subscription)
+          example: premium
+        kpis:
+          $ref: '#/components/schemas/AnalyticsKPIs'
+        charts:
+          $ref: '#/components/schemas/AnalyticsCharts'
+        capabilities:
+          $ref: '#/components/schemas/AnalyticsCapabilities'
+      x-business-rules:
+        - basic plan = Free subscription tier
+        - premium plan = Pro/Enterprise subscription tiers
+        - Premium plan has extended KPIs and filters
+        - Analytics data is updated every 6 hours
+
+    AnalyticsKPIs:
+      type: object
+      required:
+        - shoppers
+        - engaged
+        - opportunities
+        - adds_from_3d
+      properties:
+        shoppers:
+          type: integer
+          minimum: 0
+          description: Total unique viewers
+          example: 12450
+        engaged:
+          type: integer
+          minimum: 0
+          description: Users who interacted with 3D model
+          example: 3920
+        opportunities:
+          type: integer
+          minimum: 0
+          description: High-intent users
+          example: 610
+        adds_from_3d:
+          type: integer
+          minimum: 0
+          description: Add-to-cart from 3D interactions
+          example: 288
+        engagement_uplift:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Engagement rate increase (premium only)
+          example: 0.315
+        adds_per_engaged:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Conversion rate from engaged users (premium only)
+          example: 0.073
+        best_variant_uplift:
+          type: object
+          nullable: true
+          description: Best performing variant (premium only)
+          properties:
+            option:
+              type: string
+              example: Walnut
+            pp:
+              type: number
+              format: float
+              description: Percentage points increase
+              example: 3.2
+            reliable:
+              type: boolean
+              description: Statistical significance flag
+              example: true
+        geo_opportunity_index:
+          type: object
+          nullable: true
+          description: Highest opportunity region (premium only)
+          properties:
+            region:
+              type: string
+              example: MH
+            value:
+              type: number
+              format: float
+              example: 42
+
+    AnalyticsCharts:
+      type: object
+      required:
+        - progress_ladder
+        - snapshot
+      properties:
+        progress_ladder:
+          type: object
+          description: Funnel progression chart
+          required:
+            - steps
+          properties:
+            steps:
+              type: array
+              items:
+                type: object
+                required:
+                  - key
+                  - value
+                properties:
+                  key:
+                    type: string
+                    example: Viewed
+                  value:
+                    type: integer
+                    minimum: 0
+                    example: 12450
+        snapshot:
+          type: object
+          description: Snapshot data views
+          required:
+            - topRegions
+            - topFeaturesAdding
+          properties:
+            topRegions:
+              type: array
+              items:
+                type: object
+                required:
+                  - region
+                  - engagedPer1k
+                properties:
+                  region:
+                    type: string
+                    example: MH
+                  engagedPer1k:
+                    type: integer
+                    minimum: 0
+                    example: 42
+            topFeaturesAdding:
+              type: array
+              items:
+                type: object
+                required:
+                  - feature
+                  - share
+                properties:
+                  feature:
+                    type: string
+                    example: Variant selector
+                  share:
+                    type: number
+                    format: float
+                    minimum: 0
+                    maximum: 1
+                    example: 0.41
+
+    AnalyticsCapabilities:
+      type: object
+      required:
+        - filters
+        - kpis_primary
+        - kpis_secondary
+        - drilldowns
+        - export
+      properties:
+        filters:
+          type: array
+          items:
+            type: string
+            enum:
+              - date
+              - sku
+              - device
+              - source
+              - region
+          description: Available filter dimensions
+          example: ['date', 'sku', 'device', 'source', 'region']
+        kpis_primary:
+          type: array
+          items:
+            type: string
+          example: ['shoppers', 'engaged', 'opportunities', 'adds_from_3d']
+        kpis_secondary:
+          type: array
+          items:
+            type: string
+          example: ['engagement_uplift', 'adds_per_engaged']
+        drilldowns:
+          type: boolean
+          description: Whether detailed drilldowns are available
+          example: true
+        export:
+          type: boolean
+          description: Whether data export is available
+          example: true
+      x-business-rules:
+        - Basic plan has limited filters (date only)
+        - Premium plan has all filters
+        - kpis_secondary only available on premium
+        - drilldowns and export require premium plan
+
+    # ===========================
+    # SUBSCRIPTION SCHEMAS
+    # ===========================
+
+    SubscriptionMe:
+      type: object
+      required:
+        - plan
+        - trial
+        - quotas
+      properties:
+        plan:
+          type: string
+          enum:
+            - free
+            - pro
+            - enterprise
+          example: free
+        trial:
+          type: object
+          required:
+            - active
+            - daysRemaining
+          properties:
+            active:
+              type: boolean
+              description: Whether trial is currently active
+              example: false
+            daysRemaining:
+              type: integer
+              minimum: 0
+              maximum: 7
+              description: Days left in trial period
+              example: 0
+            startedAt:
+              type: string
+              format: date-time
+              nullable: true
+              description: Trial start timestamp
+              example: '2025-10-01T10:00:00Z'
+        quotas:
+          type: object
+          required:
+            - aiCredits
+            - publicViews
+          properties:
+            aiCredits:
+              $ref: '#/components/schemas/QuotaUsage'
+            publicViews:
+              $ref: '#/components/schemas/QuotaUsage'
+            products:
+              type: object
+              properties:
+                used:
+                  type: integer
+                  minimum: 0
+                  example: 2
+                limit:
+                  type: integer
+                  nullable: true
+                  description: null means unlimited
+                  example: 50
+            galleries:
+              type: object
+              properties:
+                used:
+                  type: integer
+                  minimum: 0
+                  example: 3
+                limit:
+                  type: integer
+                  nullable: true
+                  example: 10
+      x-business-rules:
+        - New users get 7-day Pro trial automatically
+        - Trial can only be activated once per account
+        - Trial expires after 7 days, reverts to selected plan
+        - Free plan limits are 2 products, 5 AI credits, 0 galleries
+        - Pro plan limits are 50 products, 10 galleries, 50 AI credits, 25K views
+        - Enterprise has unlimited everything (null limits)
+        - AI credits are consumed on each processing job
+        - Public views are tracked for shared 3D models
+        - Quotas reset monthly on subscription anniversary
+
+    QuotaUsage:
+      type: object
+      required:
+        - included
+        - purchased
+        - used
+      properties:
+        included:
+          type: integer
+          minimum: 0
+          description: Quota included in plan
+          example: 5
+        purchased:
+          type: integer
+          minimum: 0
+          description: Additional purchased quota
+          example: 0
+        used:
+          type: integer
+          minimum: 0
+          description: Quota consumed this period
+          example: 0
+      x-business-rules:
+        - Total available = included + purchased - used
+        - Operations fail when total available reaches 0
+        - Add-ons can be purchased to increase purchased quota
+
+    Plan:
+      type: object
+      required:
+        - name
+        - priceINR
+        - description
+        - features
+        - featured
+      properties:
+        name:
+          type: string
+          enum:
+            - Free
+            - Pro
+            - Enterprise
+          example: Pro
+        priceINR:
+          type: integer
+          minimum: 0
+          description: Monthly price in Indian Rupees
+          example: 1999
+        description:
+          type: string
+          maxLength: 500
+          example: Scale with galleries, credits, views, and advanced analytics
+        features:
+          type: array
+          items:
+            type: object
+            required:
+              - label
+              - available
+            properties:
+              label:
+                type: string
+                example: 50 product listings
+              available:
+                type: boolean
+                description: Whether feature is included in this plan
+                example: true
+        featured:
+          type: boolean
+          description: Whether this plan is highlighted (usually Pro)
+          example: true
+      x-business-rules:
+        - Prices are in INR (Indian Rupees)
+        - Enterprise plan requires contacting sales (custom pricing)
+        - Plan changes take effect immediately
+        - Downgrades may require reducing usage first
+
+    PlanList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Plan'
+
+    # ===========================
+    # BRANDING SCHEMAS
+    # ===========================
+
+    Branding:
+      type: object
+      required:
+        - orgName
+        - brandColor
+      properties:
+        orgName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Rivollo
+        brandColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          description: Primary brand color (hex)
+          example: '#2E5BBA'
+        brandSecondary:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          nullable: true
+          description: Secondary brand color (hex)
+          example: '#7C3AED'
+        logoURL:
+          type: string
+          format: uri
+          nullable: true
+          description: Organization logo URL
+          example: https://example.com/logo.png
+        faviconURL:
+          type: string
+          format: uri
+          nullable: true
+          description: Favicon URL
+          example: https://example.com/favicon.ico
+      x-business-rules:
+        - One branding config per user/organization
+        - logoURL and faviconURL must be HTTPS
+        - Images should be publicly accessible
+        - Recommended logo size is 200x50px
+        - Recommended favicon size is 32x32px
+
+    BrandingUpdate:
+      type: object
+      properties:
+        orgName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        brandColor:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        brandSecondary:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        logoURL:
+          type: string
+          format: uri
+          nullable: true
+        faviconURL:
+          type: string
+          format: uri
+          nullable: true
+      x-business-rules:
+        - All fields are optional
+        - Setting logoURL or faviconURL to null removes the image
+
+    # ===========================
+    # DASHBOARD SCHEMAS
+    # ===========================
+
+    DashboardOverview:
+      type: object
+      required:
+        - resume
+        - topProducts
+        - insights
+      properties:
+        resume:
+          type: array
+          description: Resume where you left off cards
+          items:
+            type: object
+            required:
+              - id
+              - type
+              - title
+              - accent
+              - status
+              - updatedAt
+            properties:
+              id:
+                type: string
+                example: prod-pebble-chair
+              type:
+                type: string
+                enum:
+                  - product
+                  - gallery
+                example: product
+              title:
+                type: string
+                example: Pebble Lounge Chair
+              accent:
+                type: string
+                pattern: '^#[0-9A-Fa-f]{6}$'
+                example: '#8B7355'
+              status:
+                type: string
+                enum:
+                  - ready
+                  - processing
+                  - error
+                example: error
+              updatedAt:
+                type: string
+                format: date-time
+                example: '2025-10-05T12:00:00Z'
+        topProducts:
+          type: array
+          description: Top performing products
+          items:
+            type: object
+            required:
+              - id
+              - name
+              - metricLabel
+              - metricValue
+            properties:
+              id:
+                type: string
+                example: prod-aero-chair
+              name:
+                type: string
+                example: Aero Mesh Office Chair
+              metricLabel:
+                type: string
+                example: Avg Time
+              metricValue:
+                type: string
+                example: 42s
+        insights:
+          type: array
+          description: Actionable insights and tips
+          items:
+            type: object
+            required:
+              - id
+              - kind
+              - text
+            properties:
+              id:
+                type: string
+                example: i1
+              kind:
+                type: string
+                enum:
+                  - tip
+                  - warning
+                  - info
+                example: tip
+              text:
+                type: string
+                example: Add hotspots to Pebble Lounge Chair for higher engagement
+      x-business-rules:
+        - resume shows last 4 modified items
+        - topProducts shows top 3 by engagement metric
+        - insights are AI-generated suggestions
+        - Data is cached for 1 hour
+
+    # ===========================
+    # SEARCH SCHEMAS
+    # ===========================
+
+    SearchResult:
+      type: object
+      required:
+        - id
+        - label
+        - type
+        - path
+      properties:
+        id:
+          type: string
+          description: Entity ID
+          example: product-1
+        label:
+          type: string
+          description: Display name
+          example: Signature Leather Loafer
+        type:
+          type: string
+          enum:
+            - Product
+            - Gallery
+          example: Product
+        path:
+          type: string
+          description: Navigation path
+          example: /workspace/product/product-1
+      x-business-rules:
+        - Searches across products and galleries
+        - Results ordered by relevance score
+        - Maximum 50 results returned
+        - Minimum query length is 1 character
+
+    SearchResultList:
+      type: array
+      items:
+        $ref: '#/components/schemas/SearchResult'
+      maxItems: 50
+
+    # ===========================
+    # PRODUCT DETAIL SCHEMAS
+    # ===========================
+
+    ProductDetail:
+      allOf:
+        - $ref: '#/components/schemas/Product'
+        - type: object
+          properties:
+            materialSections:
+              type: array
+              description: Customizable material options
+              items:
+                type: object
+                required:
+                  - id
+                  - name
+                  - options
+                properties:
+                  id:
+                    type: string
+                    example: upper
+                  name:
+                    type: string
+                    example: Upper Body
+                  options:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - id
+                        - label
+                        - swatch
+                      properties:
+                        id:
+                          type: string
+                          example: upper-leather-classic
+                        label:
+                          type: string
+                          example: Leather · Classic Matte
+                        swatch:
+                          type: string
+                          description: Color value or gradient
+                          example: '#3f3b37'
+            partConfigurations:
+              type: array
+              description: Part-specific configuration options
+              items:
+                type: object
+                required:
+                  - id
+                  - label
+                  - options
+                properties:
+                  id:
+                    type: string
+                    example: handle
+                  label:
+                    type: string
+                    example: Handle Style
+                  options:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - id
+                        - label
+                      properties:
+                        id:
+                          type: string
+                          example: handle-short
+                        label:
+                          type: string
+                          example: Short Strap
+            quickMetrics:
+              type: array
+              description: Quick performance metrics
+              items:
+                type: object
+                required:
+                  - id
+                  - label
+                  - value
+                properties:
+                  id:
+                    type: string
+                    example: engagement
+                  label:
+                    type: string
+                    example: Engagement
+                  value:
+                    type: string
+                    example: 67%
+                  delta:
+                    type: string
+                    example: +4.3%
+                  positive:
+                    type: boolean
+                    example: true
+            timelineItems:
+              type: array
+              description: Processing timeline
+              items:
+                type: object
+                required:
+                  - id
+                  - title
+                  - completed
+                properties:
+                  id:
+                    type: string
+                    example: upload
+                  title:
+                    type: string
+                    example: Reference set uploaded
+                  caption:
+                    type: string
+                    example: Sep 21 · 4 angles
+                  completed:
+                    type: boolean
+                    example: true
+            presets:
+              type: object
+              description: Rendering presets
+              properties:
+                lighting:
+                  type: array
+                  items:
+                    type: string
+                  example: ['Studio', 'Outdoor', 'Dramatic', 'Neutral']
+                background:
+                  type: array
+                  items:
+                    type: string
+                  example: ['Transparent', 'Solid Color', 'Gradient']
+                camera:
+                  type: array
+                  items:
+                    type: string
+                  example: ['Front', 'Side', 'Top-Down']
+      x-business-rules:
+        - Extended product details only available for ready products
+        - Material and part configurations are product-specific
+        - quickMetrics updated every 6 hours
+        - Presets are template-based rendering options
+
+    # ===========================
+    # JOB SCHEMAS
+    # ===========================
+
+    Job:
+      type: object
+      required:
+        - id
+        - status
+        - imageURL
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: '^job-[a-z0-9-]+$'
+          example: job-abc123
+        status:
+          type: string
+          enum:
+            - pending
+            - processing
+            - completed
+            - failed
+          example: processing
+        imageURL:
+          type: string
+          format: uri
+          description: Source image URL
+          example: https://example.com/image.jpg
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Processing progress percentage
+          example: 42
+        result:
+          type: object
+          nullable: true
+          description: Processing result (when completed)
+          properties:
+            assetId:
+              type: string
+              example: asset-xyz789
+            modelURL:
+              type: string
+              format: uri
+              example: https://example.com/model.glb
+        error:
+          type: string
+          nullable: true
+          description: Error message (when failed)
+          example: Processing timeout
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2025-10-15T10:30:00Z'
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          example: '2025-10-15T10:35:00Z'
+      x-business-rules:
+        - ID is auto-generated with 'job-' prefix
+        - Status progression is pending → processing → completed|failed
+        - progress only set when status is processing
+        - result only set when status is completed
+        - error only set when status is failed
+        - Processing typically takes 2-5 minutes
+        - Jobs are polled every 2 seconds by clients
+        - Completed jobs are retained for 30 days
+        - Each job consumes 1 AI credit from quota
+
+    JobCreate:
+      type: object
+      required:
+        - imageURL
+      properties:
+        imageURL:
+          type: string
+          format: uri
+          description: URL of the source image to process
+      x-business-rules:
+        - imageURL must be publicly accessible
+        - Supported formats are JPG, PNG (max 10MB)
+        - Requires available AI credits in quota
+        - Returns 403 if quota exceeded
+
+    # ===========================
+    # UPLOAD SCHEMAS
+    # ===========================
+
+    UploadInit:
+      type: object
+      required:
+        - filename
+      properties:
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: product-image.jpg
+        jobId:
+          type: string
+          pattern: '^job-[a-z0-9-]+$'
+          nullable: true
+          description: Optional job ID to associate with upload
+        modelId:
+          type: string
+          pattern: '^prod-[a-z0-9-]+$'
+          nullable: true
+          description: Optional product ID to associate with upload
+      x-business-rules:
+        - filename must include extension
+        - Supported extensions are jpg, jpeg, png
+        - Returns pre-signed upload URL valid for 15 minutes
+
+    UploadInitResponse:
+      type: object
+      required:
+        - uploadId
+        - uploadURL
+        - expiresAt
+      properties:
+        uploadId:
+          type: string
+          description: Unique upload identifier
+          example: upload-abc123
+        uploadURL:
+          type: string
+          format: uri
+          description: Pre-signed URL for uploading file
+          example: https://storage.example.com/upload?signature=...
+        expiresAt:
+          type: string
+          format: date-time
+          description: URL expiration timestamp
+          example: '2025-10-15T10:45:00Z'
+      x-business-rules:
+        - Client must PUT file to uploadURL within expiration time
+        - Content-Type header must match file type
+        - After upload, create Job with uploaded image URL
+
+    UploadContentResponse:
+      type: object
+      description: Result of direct multipart upload handled by Rivollo API
+      properties:
+        uploadId:
+          type: string
+          description: Upload identifier associated with stored file
+          example: upload-abc123
+        url:
+          type: string
+          format: uri
+          description: Preferred public URL of the uploaded asset
+          example: https://cdn.rivollo.com/uploads/upload-abc123.png
+        imageURL:
+          type: string
+          format: uri
+          description: Alternate field for returned image URL
+          example: https://cdn.rivollo.com/uploads/upload-abc123.png
+        publicURL:
+          type: string
+          format: uri
+          description: Public URL provided by underlying storage provider
+          example: https://storage.example.com/public/upload-abc123.png
+        contentType:
+          type: string
+          description: MIME type stored with the asset
+          example: image/png
+        sizeBytes:
+          type: integer
+          minimum: 0
+          description: Size of persisted file in bytes
+          example: 1048576
+      x-business-rules:
+        - Endpoint validates allowed file types and size (max 10MB)
+        - At least one of url, imageURL, or publicURL will be present
+        - Response follows standard envelope with data property
+        - Typically returned when using multipart fallback instead of pre-signed PUT
+
+    BackgroundRemovalRequest:
+      type: object
+      required:
+        - imageURL
+      properties:
+        imageURL:
+          type: string
+          format: uri
+          description: Public URL to the original product photo that needs background removal. Usually the result of POST /uploads/init + PUT.
+          example: https://cdn.rivollo.com/uploads/upload-abc123.png
+        refineEdges:
+          type: boolean
+          default: false
+          description: Whether to run an additional edge-cleanup pass.
+        restoreShadow:
+          type: boolean
+          default: false
+          description: Whether to reintroduce the detected ground shadow on the cleaned image.
+      x-business-rules:
+        - Source image must be a JPG or PNG no larger than 10MB
+        - Only images uploaded in the last 24 hours are eligible
+        - Background removal consumes compute but does not deduct AI credits
+
+    BackgroundRemovalResponse:
+      type: object
+      required:
+        - originalImageURL
+        - cleanedImageURL
+      properties:
+        originalImageURL:
+          type: string
+          format: uri
+          description: Echo of the original image URL.
+          example: https://cdn.rivollo.com/uploads/upload-abc123.png
+        cleanedImageURL:
+          type: string
+          format: uri
+          description: URL pointing to the transparent-background version of the image.
+          example: https://cdn.rivollo.com/uploads/upload-abc123-clean.png
+        maskURL:
+          type: string
+          format: uri
+          nullable: true
+          description: URL to a monochrome alpha mask that can be used for manual touchups.
+          example: https://cdn.rivollo.com/uploads/upload-abc123-mask.png
+        qualityScore:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Confidence score for the cleanup result.
+          example: 0.93
+
+    ConfiguratorSettings:
+      type: object
+      description: 3D product configurator settings edited in the UI.
+      properties:
+        materials:
+          type: array
+          description: Material options presented in the configurator.
+          items:
+            type: object
+            required:
+              - id
+              - label
+              - color
+            properties:
+              id:
+                type: string
+                example: matte-black
+              label:
+                type: string
+                example: Matte Black
+              color:
+                type: string
+                pattern: '^#[0-9A-Fa-f]{6}$'
+                example: '#000000'
+              affectsParts:
+                type: array
+                items:
+                  type: string
+                example: ['seat', 'backrest']
+        variants:
+          type: array
+          description: Discrete variant options (e.g., sizes, bundles).
+          items:
+            type: object
+            required:
+              - id
+              - label
+            properties:
+              id:
+                type: string
+                example: size-large
+              label:
+                type: string
+                example: Large
+              default:
+                type: boolean
+                default: false
+        hotspots:
+          type: array
+          description: Hotspots displayed on the 3D model.
+          items:
+            type: object
+            required:
+              - id
+              - title
+              - description
+              - position
+            properties:
+              id:
+                type: string
+                example: hotspot-1
+              title:
+                type: string
+                example: Crafted Stitching
+              description:
+                type: string
+                example: Hand-stitched seams for durability.
+              position:
+                type: object
+                required:
+                  - x
+                  - y
+                  - z
+                properties:
+                  x:
+                    type: number
+                  y:
+                    type: number
+                  z:
+                    type: number
+        links:
+          type: array
+          description: External links shown in the configurator.
+          items:
+            type: object
+            required:
+              - label
+              - url
+            properties:
+              label:
+                type: string
+                example: Buy on Storefront
+              url:
+                type: string
+                format: uri
+                example: https://store.example.com/products/prod-neo-headphones
+        settings:
+          type: object
+          description: Miscellaneous viewer settings.
+          properties:
+            autoSpin:
+              type: boolean
+              default: true
+            defaultCamera:
+              type: string
+              example: three-quarter
+        notes:
+          type: string
+          nullable: true
+          description: Editor notes or guidelines for the team.
+
+    PublishProductRequest:
+      type: object
+      properties:
+        publish:
+          type: boolean
+          default: true
+          description: Flag indicating if the product should be published (true) or unpublished (false).
+        channel:
+          type: string
+          nullable: true
+          description: Optional channel identifier for analytics.
+          example: web
+        message:
+          type: string
+          nullable: true
+          description: Optional message shown to teammates during hand-off.
+
+    # ===========================
+    # HEALTH CHECK SCHEMA
+    # ===========================
+
+    HealthStatus:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum:
+            - healthy
+            - degraded
+            - unhealthy
+          example: healthy
+        timestamp:
+          type: string
+          format: date-time
+          example: '2025-10-15T12:00:00Z'
+        version:
+          type: string
+          example: 1.0.0
+        services:
+          type: object
+          description: Status of dependent services
+          properties:
+            database:
+              type: string
+              enum:
+                - up
+                - down
+              example: up
+            storage:
+              type: string
+              enum:
+                - up
+                - down
+              example: up
+            ai_processing:
+              type: string
+              enum:
+                - up
+                - down
+              example: up
+      x-business-rules:
+        - Returns 200 when healthy
+        - Returns 503 when unhealthy
+        - Used for load balancer health checks
+        - No authentication required
+
+  responses:
+    # Success responses with envelope
+    OkAuth:
+      description: Successful authentication
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AuthResponse'
+
+    OkUser:
+      description: User data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+
+    OkProduct:
+      description: Product data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Product'
+
+    OkProductDetail:
+      description: Product detail retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ProductDetail'
+
+    OkProductList:
+      description: Product list retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ProductList'
+
+    OkGallery:
+      description: Gallery data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Gallery'
+
+    OkGalleryList:
+      description: Gallery list retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GalleryList'
+
+    OkAnalytics:
+      description: Analytics data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AnalyticsOverview'
+
+    OkSubscription:
+      description: Subscription data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/SubscriptionMe'
+
+    OkPlanList:
+      description: Plan list retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PlanList'
+
+    OkBranding:
+      description: Branding data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Branding'
+
+    OkDashboard:
+      description: Dashboard data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DashboardOverview'
+
+    OkSearch:
+      description: Search results retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/SearchResultList'
+
+    OkJob:
+      description: Job data retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Job'
+
+    OkUploadInit:
+      description: Upload initialized successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UploadInitResponse'
+
+    OkUploadContent:
+      description: File uploaded successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UploadContentResponse'
+
+    OkBackgroundRemoval:
+      description: Background removed successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/BackgroundRemovalResponse'
+
+    OkConfigurator:
+      description: Configurator settings saved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ConfiguratorSettings'
+
+    OkPublish:
+      description: Product publish state updated successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      published:
+                        type: boolean
+                        description: Current publish state of the product.
+                        example: true
+                      publishedAt:
+                        type: string
+                        format: date-time
+                        nullable: true
+                        description: Timestamp when the product became publicly available.
+    OkDebugInfo:
+      description: Debug information retrieved successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: true
+                    description: Arbitrary debug payload for diagnostics tooling
+
+    OkHealth:
+      description: System is healthy
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/HealthStatus'
+
+    OkDeleted:
+      description: Resource deleted successfully
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum: [true]
+                  message:
+                    type: string
+                    example: Resource deleted successfully
+                  data:
+                    type: object
+                    nullable: true
+                    example: null
+
+    # Error responses
+    BadRequest:
+      description: Bad request - validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: Validation error
+            code: VALIDATION_ERROR
+            details:
+              email: Email is required
+              password: Password must be at least 8 characters
+
+    Unauthorized:
+      description: Unauthorized - invalid or missing token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: Authentication required
+            code: UNAUTHORIZED
+
+    Forbidden:
+      description: Forbidden - insufficient permissions or quota exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: Plan limit exceeded. Upgrade to Pro to create more products.
+            code: QUOTA_EXCEEDED
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: Product not found
+            code: NOT_FOUND
+
+    Conflict:
+      description: Conflict - resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: Email already registered
+            code: CONFLICT
+
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: An unexpected error occurred
+            code: INTERNAL_ERROR
+
+paths:
+  # ===========================
+  # HEALTH CHECK
+  # ===========================
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check endpoint
+      description: Check API health status and service availability
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          $ref: '#/components/responses/OkHealth'
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-business-rules:
+        - No authentication required
+        - Returns 200 when all services are operational
+        - Returns 503 when any critical service is down
+        - Used by load balancers for health monitoring
+
+  # ===========================
+  # AUTHENTICATION
+  # ===========================
+
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Login with email and password
+      description: Authenticate user and return JWT token
+      operationId: authLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkAuth'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                success: false
+                message: Invalid email or password
+                code: INVALID_CREDENTIALS
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Rate limited to 5 attempts per 15 minutes per IP
+        - Account locked after 10 failed attempts (24 hour cooldown)
+        - Token expires after 24 hours (or 30 days with rememberMe)
+        - Last login timestamp is updated
+
+  /auth/signup:
+    post:
+      tags:
+        - Auth
+      summary: Create new user account
+      description: Register new user and return JWT token
+      operationId: authSignup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkAuth'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Email must be unique
+        - Password must be at least 8 characters with mixed case and numbers
+        - New users get Free plan with 7-day Pro trial
+        - Welcome email sent asynchronously
+
+  /auth/google:
+    post:
+      tags:
+        - Auth
+      summary: Login or signup with Google OAuth
+      description: Authenticate using Google OAuth token
+      operationId: authGoogle
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleAuthRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkAuth'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Google credential is verified with Google servers
+        - Existing users are logged in
+        - New users are auto-created with email from Google token
+        - Name and avatar extracted from Google profile
+
+  /users/me:
+    get:
+      tags:
+        - Auth
+      summary: Get current user profile
+      description: Retrieve authenticated user's profile data
+      operationId: userGetMe
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Requires valid JWT token
+        - Returns user data from token claims
+
+    patch:
+      tags:
+        - Auth
+      summary: Update current user profile
+      description: Update authenticated user's profile fields
+      operationId: userUpdateMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                  maxLength: 50
+                lastName:
+                  type: string
+                  maxLength: 50
+                avatarUrl:
+                  type: string
+                  format: uri
+                  nullable: true
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - All fields are optional
+        - Email cannot be changed
+        - avatarUrl must be HTTPS
+        - updatedAt is automatically updated
+
+  # ===========================
+  # PRODUCTS
+  # ===========================
+
+  /products:
+    get:
+      tags:
+        - Products
+      summary: List products
+      description: Get paginated list of user's products with filtering and sorting
+      operationId: productList
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/pageSize'
+        - $ref: '#/components/parameters/q'
+        - $ref: '#/components/parameters/sort'
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum:
+              - ready
+              - processing
+              - error
+        - name: tags
+          in: query
+          description: Filter by tags (comma-separated)
+          schema:
+            type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/OkProductList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Returns only products owned by authenticated user
+        - Default sort is by newest first (-createdAt)
+        - q searches name, description, brand, and tags
+        - tags filter uses OR logic (any matching tag)
+
+    post:
+      tags:
+        - Products
+      summary: Create new product
+      description: Create a new product (subject to plan limits)
+      operationId: productCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductCreate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkProduct'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Checks product limit based on plan (Free=2, Pro=50, Enterprise=unlimited)
+        - Returns 403 if limit exceeded
+        - Initial status is 'processing'
+        - ID is auto-generated
+
+  /products/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Product ID
+        schema:
+          type: string
+          pattern: '^prod-[a-z0-9-]+$'
+
+    get:
+      tags:
+        - Products
+      summary: Get product by ID
+      description: Retrieve detailed product information
+      operationId: productGet
+      responses:
+        '200':
+          $ref: '#/components/responses/OkProductDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Returns 404 if product doesn't exist or doesn't belong to user
+        - Includes extended details (materials, configurations, metrics)
+
+    put:
+      tags:
+        - Products
+      summary: Replace product
+      description: Replace entire product (all fields required)
+      operationId: productReplace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductCreate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkProduct'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - All fields must be provided
+        - ID, status, createdAt, updatedAt are immutable
+        - updatedAt is automatically updated
+
+    patch:
+      tags:
+        - Products
+      summary: Update product
+      description: Partially update product fields
+      operationId: productUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductUpdate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkProduct'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Only provided fields are updated
+        - ID, status, createdAt are immutable
+        - updatedAt is automatically updated
+
+    delete:
+      tags:
+        - Products
+      summary: Delete product
+      description: Permanently delete a product
+      operationId: productDelete
+      responses:
+        '200':
+          $ref: '#/components/responses/OkDeleted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Soft delete (marked as deleted, retained for 30 days)
+        - Related assets are also marked for deletion
+        - Gallery associations are removed
+        - Cannot be undone (use archive instead for reversible deletion)
+
+  /products/{id}/configurator:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Product ID
+        schema:
+          type: string
+          pattern: '^prod-[a-z0-9-]+$'
+    patch:
+      tags:
+        - Products
+      summary: Update product configurator settings
+      description: Persist materials, variants, hotspots, and other configurator options after the 3D model is generated.
+      operationId: productUpdateConfigurator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfiguratorSettings'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkConfigurator'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Available only after the associated job status is completed
+        - Materials and variants must reference parts present in the generated asset
+        - Hotspot positions use normalized model coordinates (-1 to 1)
+
+  /products/{id}/publish:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Product ID
+        schema:
+          type: string
+          pattern: '^prod-[a-z0-9-]+$'
+    post:
+      tags:
+        - Products
+      summary: Publish or unpublish product
+      description: Final step in the add-product flow. Confirms the 3D configurator is ready and toggles public availability.
+      operationId: productPublish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishProductRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkPublish'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Product cannot be published because prerequisites are incomplete (e.g., missing 3D asset).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Requires completed 3D job with associated asset
+        - Published products increment public view quota
+        - Unpublishing retains analytics history but pauses public embeds
+
+  # ===========================
+  # GALLERIES
+  # ===========================
+
+  /galleries:
+    get:
+      tags:
+        - Galleries
+      summary: List galleries
+      description: Get paginated list of user's galleries (Pro/Enterprise only)
+      operationId: galleryList
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/pageSize'
+        - $ref: '#/components/parameters/q'
+        - $ref: '#/components/parameters/sort'
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum:
+              - ready
+              - processing
+      responses:
+        '200':
+          $ref: '#/components/responses/OkGalleryList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Gallery access not available on Free plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Requires Pro or Enterprise plan
+        - Free plan returns 403 error
+
+    post:
+      tags:
+        - Galleries
+      summary: Create new gallery
+      description: Create a new product gallery (Pro/Enterprise only)
+      operationId: galleryCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GalleryCreate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkGallery'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Requires Pro or Enterprise plan
+        - Pro plan limited to 10 galleries
+        - Initial status is 'ready'
+        - productCount and assetCount start at 0
+
+  /galleries/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Gallery ID
+        schema:
+          type: string
+          pattern: '^gallery-[a-z0-9-]+$'
+
+    get:
+      tags:
+        - Galleries
+      summary: Get gallery by ID
+      description: Retrieve gallery details
+      operationId: galleryGet
+      responses:
+        '200':
+          $ref: '#/components/responses/OkGallery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+    put:
+      tags:
+        - Galleries
+      summary: Replace gallery
+      description: Replace entire gallery
+      operationId: galleryReplace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GalleryCreate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkGallery'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+    patch:
+      tags:
+        - Galleries
+      summary: Update gallery
+      description: Partially update gallery fields
+      operationId: galleryUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GalleryUpdate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkGallery'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+    delete:
+      tags:
+        - Galleries
+      summary: Delete gallery
+      description: Delete a gallery (products are not deleted)
+      operationId: galleryDelete
+      responses:
+        '200':
+          $ref: '#/components/responses/OkDeleted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Products in gallery are not deleted
+        - Gallery-product associations are removed
+
+  # ===========================
+  # ANALYTICS
+  # ===========================
+
+  /analytics/overview:
+    get:
+      tags:
+        - Analytics
+      summary: Get analytics overview
+      description: Retrieve engagement and conversion analytics
+      operationId: analyticsOverview
+      parameters:
+        - name: dateFrom
+          in: query
+          description: Start date filter (ISO 8601)
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          description: End date filter (ISO 8601)
+          schema:
+            type: string
+            format: date
+        - name: sku
+          in: query
+          description: Filter by product ID (premium only)
+          schema:
+            type: string
+        - name: device
+          in: query
+          description: Filter by device type (premium only)
+          schema:
+            type: string
+            enum:
+              - mobile
+              - tablet
+              - desktop
+        - name: source
+          in: query
+          description: Filter by traffic source (premium only)
+          schema:
+            type: string
+        - name: region
+          in: query
+          description: Filter by region code (premium only)
+          schema:
+            type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/OkAnalytics'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Advanced filters require Pro/Enterprise plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Free plan gets basic analytics (plan=basic)
+        - Pro/Enterprise get premium analytics with all filters
+        - Data updated every 6 hours
+        - Date range limited to 90 days
+        - Default range is last 30 days
+
+  # ===========================
+  # SUBSCRIPTIONS
+  # ===========================
+
+  /subscriptions/me:
+    get:
+      tags:
+        - Subscriptions
+      summary: Get current subscription
+      description: Retrieve user's subscription and quota information
+      operationId: subscriptionGetMe
+      responses:
+        '200':
+          $ref: '#/components/responses/OkSubscription'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Returns current plan and active trial status
+        - Includes real-time quota usage
+        - Quotas reset monthly on subscription anniversary
+
+  /subscriptions/plans:
+    get:
+      tags:
+        - Subscriptions
+      summary: List available plans
+      description: Get all subscription plans with features and pricing
+      operationId: planList
+      security: []
+      responses:
+        '200':
+          $ref: '#/components/responses/OkPlanList'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - No authentication required
+        - Returns Free, Pro, and Enterprise plans
+        - Pricing in Indian Rupees (INR)
+
+  # ===========================
+  # BRANDING
+  # ===========================
+
+  /branding:
+    get:
+      tags:
+        - Branding
+      summary: Get organization branding
+      description: Retrieve user's branding settings
+      operationId: brandingGet
+      responses:
+        '200':
+          $ref: '#/components/responses/OkBranding'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Returns default branding if not customized
+        - Default orgName is 'Rivollo'
+
+    patch:
+      tags:
+        - Branding
+      summary: Update organization branding
+      description: Update branding settings
+      operationId: brandingUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrandingUpdate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkBranding'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - All fields are optional
+        - logoURL and faviconURL must be HTTPS
+        - Set to null to remove images
+
+  # ===========================
+  # DASHBOARD
+  # ===========================
+
+  /dashboard/overview:
+    get:
+      tags:
+        - Products
+      summary: Get dashboard overview
+      description: Retrieve dashboard with recent items, top products, and insights
+      operationId: dashboardOverview
+      responses:
+        '200':
+          $ref: '#/components/responses/OkDashboard'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - resume shows last 4 modified items
+        - topProducts shows top 3 by engagement
+        - insights are AI-generated recommendations
+        - Data cached for 1 hour
+
+  # ===========================
+  # SEARCH
+  # ===========================
+
+  /search:
+    get:
+      tags:
+        - Search
+      summary: Global search
+      description: Search across products and galleries
+      operationId: search
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - name: type
+          in: query
+          description: Filter by entity type
+          schema:
+            type: string
+            enum:
+              - Product
+              - Gallery
+      responses:
+        '200':
+          $ref: '#/components/responses/OkSearch'
+        '400':
+          description: Query too short
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Minimum query length is 1 character
+        - Maximum 50 results returned
+        - Results ordered by relevance score
+        - Searches name and description fields
+
+  # ===========================
+  # JOBS
+  # ===========================
+
+  /jobs:
+    post:
+      tags:
+        - Jobs
+      summary: Create processing job
+      description: Step 2 of the pipeline. After uploading an image, call this endpoint with the public `imageURL` to trigger background cleanup and 3D generation.
+      operationId: jobCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobCreate'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: AI credits quota exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Requires 1 AI credit from quota
+        - Returns 403 if quota exhausted
+        - imageURL must be publicly accessible
+        - Supported formats are JPG, PNG (max 10MB)
+        - Initial status is 'pending'
+        - Processing typically takes 2-5 minutes
+        - Completed jobs include processed metadata (e.g., result.assetId, result.modelURL)
+
+  /jobs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Job ID
+        schema:
+          type: string
+          pattern: '^job-[a-z0-9-]+$'
+
+    get:
+      tags:
+        - Jobs
+      summary: Get job status
+      description: Retrieve job processing status and result
+      operationId: jobGet
+      responses:
+        '200':
+          $ref: '#/components/responses/OkJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Poll this endpoint every 2 seconds for status updates
+        - Status progression is pending → processing → completed|failed
+        - result.assetId available when status is completed
+        - Completed jobs retained for 30 days
+
+  /jobs/debug/test:
+    get:
+      tags:
+        - Jobs
+      summary: Run job pipeline diagnostics
+      description: Execute a lightweight diagnostic call to verify job infrastructure connectivity and credentials.
+      operationId: jobDebugTest
+      x-internal: true
+      responses:
+        '200':
+          $ref: '#/components/responses/OkDebugInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Intended for troubleshooting by administrators
+        - May include environment-specific diagnostic details
+
+  /jobs/debug/inference/{providerUid}:
+    parameters:
+      - name: providerUid
+        in: path
+        required: true
+        description: Inference provider identifier
+        schema:
+          type: string
+    get:
+      tags:
+        - Jobs
+      summary: Inspect inference provider debug status
+      description: Retrieve debug information for a specific inference provider execution.
+      operationId: jobDebugInference
+      x-internal: true
+      responses:
+        '200':
+          $ref: '#/components/responses/OkDebugInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Requires elevated permissions
+        - Response schema is intentionally flexible for diagnostics
+
+  # ===========================
+  # UPLOADS
+  # ===========================
+
+  /uploads/content:
+    post:
+      tags:
+        - Uploads
+      summary: Upload file content via multipart (fallback)
+      description: Upload a file directly to Rivollo storage using multipart/form-data. Generally used only when pre-signed upload via POST /uploads/init cannot be completed by the client.
+      operationId: uploadContent
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Image file to upload (JPG or PNG)
+                filename:
+                  type: string
+                  description: Optional override for stored filename
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUploadContent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Maximum file size 10MB
+        - Supported types jpg, jpeg, png, webp
+        - Recommended to use after POST /uploads/init fails or when client cannot PUT to signed URL
+        - Returns public URL for use in job creation
+
+  /uploads/remove-background:
+    post:
+      tags:
+        - Uploads
+      summary: Remove background from uploaded image
+      description: Optional step between upload and 3D generation. Takes a product photo and returns a transparent-background version to review before generating the 3D model.
+      operationId: removeBackground
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackgroundRemovalRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkBackgroundRemoval'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Image quality too low for reliable background removal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Accepts JPG or PNG images via publicly accessible URL
+        - Processing takes 3-5 seconds on average
+        - Cleaned images expire after 24 hours if not used to create a job
+
+  /uploads/init:
+    post:
+      tags:
+        - Uploads
+      summary: Initialize file upload
+      description: Step 1 of the upload pipeline. Returns a pre-signed URL so the client can PUT the original image directly to storage before creating a processing job.
+      operationId: uploadInit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadInit'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUploadInit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+      x-business-rules:
+        - Returns pre-signed URL valid for 15 minutes
+        - Supported extensions are jpg, jpeg, png
+        - Client must PUT file to uploadURL and then call POST /jobs with resulting imageURL
+        - Recommended default path; use multipart fallback only if storage PUT is unavailable
