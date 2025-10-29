@@ -1,61 +1,146 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from sqlalchemy.orm import Session
-import uuid
+import io
 import logging
 import os
-import io
+import uuid
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+from urllib.parse import urlparse
+
+import httpx
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id
 from app.core.db import get_db
-from app.models.models import Upload, Job
-from app.schemas.jobs import UploadImageResponse
-from app.schemas.uploads import UploadInitRequest, UploadContentResponse
-from app.services.storage import storage_service
+from app.models.models import Job, Upload
+from app.schemas.uploads import (
+	BackgroundRemovalRequest,
+	BackgroundRemovalResponse,
+	UploadContentResponse,
+	UploadInitRequest,
+	UploadInitResponse,
+)
 from app.services.model_converter import model_converter
+from app.services.storage import storage_service
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["uploads"])
 
+_UPLOAD_URL_TTL_MINUTES = 60
+_VALID_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+_DIRECT_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".glb", ".gltf", ".usdz"}
 
-@router.post("/uploads")
-def create_upload(
+_logger = logging.getLogger(__name__)
+
+
+def _normalize_prefixed_uuid(value: Optional[str], prefix: str) -> Optional[uuid.UUID]:
+	if not value:
+		return None
+	raw_value = value.strip()
+	if raw_value.startswith(prefix):
+		raw_value = raw_value[len(prefix):]
+	try:
+		return uuid.UUID(raw_value)
+	except ValueError:
+		return None
+
+
+def _extract_upload_identifier(file_url: str) -> str:
+	parsed = urlparse(file_url)
+	path_parts = [part for part in parsed.path.split("/") if part]
+	try:
+		uploads_index = path_parts.index("uploads")
+		upload_segment = path_parts[uploads_index + 1]
+	except (ValueError, IndexError):
+		upload_segment = uuid.uuid4().hex
+	return f"upload-{upload_segment}"
+
+
+def _validate_filename(filename: str, allowed_extensions: Optional[set[str]] = None) -> tuple[str, str]:
+	name = filename.strip()
+	if not name or "." not in name or len(name) > 255:
+		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
+	extension = os.path.splitext(name)[1].lower()
+	if allowed_extensions is not None and extension not in allowed_extensions:
+		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
+	return name, extension
+
+
+def _build_upload_content_response(
+	upload_id: str,
+	url: str,
+	public_url: Optional[str],
+	content_type: Optional[str],
+	size_bytes: int,
+	formats: Optional[Dict[str, str]] = None,
+	blob_urls: Optional[Dict[str, str]] = None,
+) -> Dict[str, object]:
+	payload = UploadContentResponse(
+		upload_id=upload_id,
+		url=url,
+		image_url=url,
+		public_url=public_url,
+		content_type=content_type,
+		size_bytes=size_bytes,
+		formats=formats,
+		blob_urls=blob_urls,
+	)
+	return payload.model_dump(by_alias=True)
+
+
+@router.post("/uploads/init")
+async def init_upload(
 	payload: UploadInitRequest,
 	user_id: str = Depends(get_current_user_id),
 	db: Session = Depends(get_db),
 ):
-	filename = payload.filename
-	if not filename or "." not in filename or len(filename) > 255:
-		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
-	upload_url, file_url = storage_service.create_presigned_upload(user_id=user_id, filename=filename)
+	filename, extension = _validate_filename(payload.filename, _VALID_UPLOAD_EXTENSIONS)
+
+	try:
+		upload_url, file_url = storage_service.create_presigned_upload(user_id=user_id, filename=filename)
+	except Exception as exc:
+		_logger.exception("Failed to create presigned upload for %s: %s", filename, exc)
+		raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to initialize upload")
+
 	rec = Upload(filename=filename, upload_url=upload_url, file_url=file_url, created_by=user_id)
 	db.add(rec)
 
-	# If jobId is provided, and a modelId is provided, persist modelId on the job (both column and meta)
-	if getattr(payload, "jobId", None):
-		try:
-			job_uuid = uuid.UUID(payload.jobId)
-		except Exception:
-			job_uuid = None
-		if job_uuid is not None:
-			job = db.query(Job).filter(Job.id == job_uuid, Job.created_by == user_id).one_or_none()
-			if job is not None and getattr(payload, "modelId", None):
-				meta = dict(job.meta or {})
-				model_uuid = uuid.UUID(str(payload.modelId))
-				try:
-					job.modelid = model_uuid
-					logging.getLogger(__name__).info("uploads: set job.modelid=%s for job.id=%s", job.modelid, job.id)
-				except Exception:
-					logging.getLogger(__name__).exception("uploads: failed setting job.modelid for job.id=%s", job.id)
-				meta["modelid"] = str(model_uuid)
-				job.meta = meta
-				db.add(job)
-				# Best-effort commit of job update
-				try:
-					db.commit()
-				except Exception:
-					pass
-	db.commit()
-	return api_success(UploadImageResponse(uploadUrl=upload_url, fileUrl=file_url).model_dump())
+	job_uuid = _normalize_prefixed_uuid(payload.job_id, "job-")
+	model_uuid = _normalize_prefixed_uuid(payload.model_id, "prod-")
+
+	if job_uuid and model_uuid:
+		job = db.query(Job).filter(Job.id == job_uuid, Job.created_by == user_id).one_or_none()
+		if job is not None:
+			meta = dict(getattr(job, "meta", {}) or {})
+			try:
+				job.modelid = model_uuid  # type: ignore[attr-defined]
+				_logger.info("Linked model %s to job %s via upload init", job.modelid, job.id)
+			except Exception:
+				_logger.exception("Failed to set job.modelid for job %s", job.id)
+			meta["modelid"] = str(model_uuid)
+			job.meta = meta  # type: ignore[assignment]
+			db.add(job)
+			try:
+				db.commit()
+			except Exception:
+				_logger.exception("Failed to commit job metadata update")
+				db.rollback()
+
+	try:
+		db.commit()
+	except Exception:
+		_logger.exception("Failed to commit upload record")
+		db.rollback()
+		raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to persist upload")
+
+	expires_at = datetime.utcnow() + timedelta(minutes=_UPLOAD_URL_TTL_MINUTES)
+	response_payload = UploadInitResponse(
+		upload_id=_extract_upload_identifier(file_url),
+		upload_url=upload_url,
+		image_url=file_url,
+		expires_at=expires_at,
+	).model_dump(by_alias=True)
+	return api_success(response_payload)
 
 
 @router.post("/uploads/content")
@@ -64,129 +149,93 @@ async def upload_content(
 	user_id: str = Depends(get_current_user_id),
 	db: Session = Depends(get_db),
 ):
-	filename = file.filename
-	if not filename or "." not in filename or len(filename) > 255:
-		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
-	
+	if not file.filename:
+		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename is required")
+	filename, extension = _validate_filename(file.filename, _DIRECT_UPLOAD_EXTENSIONS)
 	logger = logging.getLogger(__name__)
-	original_filename = filename
-	base_name = os.path.splitext(filename)[0]
-	original_extension = os.path.splitext(filename)[1].lstrip('.')
-	
-	# Check if this is a GLB file that needs conversion to USDZ
+
 	if model_converter.is_glb_file(filename):
 		try:
-			# Read the original GLB content
 			glb_content = await file.read()
 			glb_stream = io.BytesIO(glb_content)
-			
-			# Convert GLB to USDZ
 			usdz_bytes, usdz_content_type = model_converter.convert_glb_to_usdz(glb_stream, filename)
-			
-			# Prepare both files for upload
+
 			files_to_upload = [
-				{
-					'extension': 'glb',
-					'content_type': file.content_type or 'model/gltf-binary',
-					'stream': io.BytesIO(glb_content)
-				},
-				{
-					'extension': 'usdz',
-					'content_type': usdz_content_type,
-					'stream': io.BytesIO(usdz_bytes)
-				}
+				{"extension": "glb", "content_type": file.content_type or "model/gltf-binary", "stream": io.BytesIO(glb_content)},
+				{"extension": "usdz", "content_type": usdz_content_type, "stream": io.BytesIO(usdz_bytes)},
 			]
-			
-			# Upload both files to storage
+
 			cdn_urls, blob_urls, asset_url_base = storage_service.upload_dual_format_files(
 				user_id=user_id,
-				base_filename=base_name,
-				files=files_to_upload
+				base_filename=os.path.splitext(filename)[0],
+				files=files_to_upload,
 			)
-			
-			# Create upload records for both files
+
 			glb_url, usdz_url = cdn_urls
 			glb_blob_url, usdz_blob_url = blob_urls
-			
-			# Primary record for GLB file
+
+			meta_common = {
+				"original_filename": filename,
+				"asset_url_base": asset_url_base,
+			}
+
 			glb_rec = Upload(
-				filename=f"{base_name}.glb",
+				filename=f"{os.path.splitext(filename)[0]}.glb",
 				upload_url=None,
 				file_url=glb_url,
 				created_by=user_id,
 				meta={
-					"original_filename": original_filename,
+					**meta_common,
 					"has_converted_formats": True,
 					"converted_formats": ["usdz"],
 					"usdz_url": usdz_url,
 					"blob_url": glb_blob_url,
-					"asset_url_base": asset_url_base
-				}
+				},
 			)
 			db.add(glb_rec)
-			
-			# Secondary record for USDZ file
+
 			usdz_rec = Upload(
-				filename=f"{base_name}.usdz",
+				filename=f"{os.path.splitext(filename)[0]}.usdz",
 				upload_url=None,
 				file_url=usdz_url,
 				created_by=user_id,
 				meta={
-					"original_filename": original_filename,
+					**meta_common,
 					"converted_from": "glb",
 					"source_file_url": glb_url,
 					"is_converted_format": True,
 					"blob_url": usdz_blob_url,
-					"asset_url_base": asset_url_base
-				}
+				},
 			)
 			db.add(usdz_rec)
-			
 			db.commit()
-			
-			logger.info(
-				"Successfully uploaded GLB file %s and converted USDZ for user %s. GLB URL: %s, USDZ URL: %s",
-				original_filename, user_id, glb_url, usdz_url
+
+			logger.info("Uploaded GLB and converted USDZ for %s", filename)
+
+			response_payload = _build_upload_content_response(
+				upload_id=_extract_upload_identifier(glb_url),
+				url=glb_url,
+				public_url=glb_blob_url,
+				content_type=file.content_type,
+				size_bytes=len(glb_content),
+				formats={"glb": glb_url, "usdz": usdz_url},
+				blob_urls={"glb": glb_blob_url, "usdz": usdz_blob_url},
 			)
-			
-			# Return both URLs in the response
-			return api_success({
-				"fileUrl": glb_url,  # Primary GLB file URL
-				"usdzUrl": usdz_url,  # Converted USDZ file URL
-				"formats": {
-					"glb": glb_url,
-					"usdz": usdz_url
-				},
-				"blobUrls": {
-					"glb": glb_blob_url,
-					"usdz": usdz_blob_url
-				},
-				"assetUrl": asset_url_base,  # Asset URL without extension
-				"hasMultipleFormats": True,
-				"conversionStatus": {
-					"usdz": {
-						"attempted": True,
-						"successful": True,
-						"error": None
-					}
-				}
-			})
-			
-		except Exception as e:
-			logger.error(
-				"Failed to convert GLB file %s to USDZ for user %s: %s",
-				original_filename, user_id, str(e)
-			)
-			# Fall back to uploading only the original GLB file
-			file.file.seek(0)  # Reset file pointer
+			response_payload["assetUrl"] = asset_url_base  # type: ignore[index]
+			response_payload["hasMultipleFormats"] = True  # type: ignore[index]
+			return api_success(response_payload)
+
+		except Exception as exc:
+			logger.exception("GLB conversion failed, falling back to raw upload: %s", exc)
+			stream = io.BytesIO(glb_content)
+			stream.seek(0)
 			file_url, blob_url = storage_service.upload_file_content(
 				user_id=user_id,
 				filename=filename,
 				content_type=file.content_type,
-				stream=file.file
+				stream=stream,
 			)
-			
-			# Create upload record with conversion failure info
+
 			rec = Upload(
 				filename=filename,
 				upload_url=None,
@@ -195,53 +244,127 @@ async def upload_content(
 				meta={
 					"conversion_attempted": True,
 					"conversion_failed": True,
-					"conversion_error": str(e),
+					"conversion_error": str(exc),
 					"blob_url": blob_url,
-					"original_filename": original_filename
-				}
+					"original_filename": filename,
+				},
 			)
 			db.add(rec)
 			db.commit()
-			
-			logger.info(
-				"Successfully uploaded GLB file %s with conversion fallback for user %s. GLB URL: %s",
-				original_filename, user_id, file_url
+
+			response_payload = _build_upload_content_response(
+				upload_id=_extract_upload_identifier(file_url),
+				url=file_url,
+				public_url=blob_url,
+				content_type=file.content_type,
+				size_bytes=len(glb_content),
+				formats={"glb": file_url},
+				blob_urls={"glb": blob_url} if blob_url else None,
 			)
-			
-			# Return response with conversion failure information
-			return api_success({
-				"fileUrl": file_url,
-				"blobUrl": blob_url,
-				"formats": {
-					"glb": file_url
-				},
-				"hasMultipleFormats": False,
-				"conversionStatus": {
-					"usdz": {
-						"attempted": True,
-						"successful": False,
-						"error": str(e)
-					}
-				}
-			})
-	else:
-		# Handle non-GLB files normally
+			response_payload["hasMultipleFormats"] = False  # type: ignore[index]
+			response_payload["conversionStatus"] = {  # type: ignore[index]
+				"usdz": {"attempted": True, "successful": False, "error": str(exc)}
+			}
+			return api_success(response_payload)
+
+	content_bytes = await file.read()
+	stream = io.BytesIO(content_bytes)
+	stream.seek(0)
+
+	try:
 		file_url, blob_url = storage_service.upload_file_content(
 			user_id=user_id,
 			filename=filename,
 			content_type=file.content_type,
-			stream=file.file
+			stream=stream,
 		)
-		
-		# Persist minimal upload record for audit
+	except Exception as exc:
+		logger.exception("Failed to upload file content: %s", exc)
+		raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="File upload failed")
+
+	rec = Upload(
+		filename=filename,
+		upload_url=None,
+		file_url=file_url,
+		created_by=user_id,
+		meta={"blob_url": blob_url},
+	)
+	db.add(rec)
+	db.commit()
+
+	response_payload = _build_upload_content_response(
+		upload_id=_extract_upload_identifier(file_url),
+		url=file_url,
+		public_url=blob_url,
+		content_type=file.content_type,
+		size_bytes=len(content_bytes),
+	)
+	return api_success(response_payload)
+
+
+@router.post("/uploads/remove-background")
+async def remove_background(
+	payload: BackgroundRemovalRequest,
+	user_id: str = Depends(get_current_user_id),
+	db: Session = Depends(get_db),
+):
+	source_url = str(payload.image_url)
+	try:
+		async with httpx.AsyncClient(timeout=30.0) as client:
+			resp = await client.get(source_url)
+	except httpx.RequestError as exc:
+		_logger.warning("Failed to download image for background removal: %s", exc)
+		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to download imageURL")
+
+	if resp.status_code != 200 or not resp.content:
+		_logger.warning("Background removal download returned status %s", resp.status_code)
+		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to download imageURL")
+
+	image_bytes = resp.content
+	original_filename = os.path.basename(urlparse(source_url).path) or "image.png"
+	base_name, ext = os.path.splitext(original_filename)
+	target_ext = ext.lower() if ext.lower() in {".png", ".webp"} else ".png"
+	content_type = resp.headers.get("content-type", "image/png" if target_ext == ".png" else "image/webp")
+
+	clean_filename = f"{base_name}-clean{target_ext}"
+	stream = io.BytesIO(image_bytes)
+	stream.seek(0)
+
+	try:
+		clean_url, clean_blob_url = storage_service.upload_file_content(
+			user_id=user_id,
+			filename=clean_filename,
+			content_type=content_type,
+			stream=stream,
+		)
+
 		rec = Upload(
-			filename=filename, 
-			upload_url=None, 
-			file_url=file_url, 
+			filename=clean_filename,
+			upload_url=None,
+			file_url=clean_url,
 			created_by=user_id,
-			meta={"blob_url": blob_url}
+			meta={
+				"blob_url": clean_blob_url,
+				"source_image_url": source_url,
+				"background_removed": True,
+				"refine_edges": payload.refine_edges,
+				"restore_shadow": payload.restore_shadow,
+			},
 		)
 		db.add(rec)
 		db.commit()
-		
-		return api_success(UploadContentResponse(fileUrl=file_url, blobUrl=blob_url).model_dump())
+		quality_score = 0.9
+	except Exception as exc:
+		_logger.exception("Failed to store cleaned image, returning original: %s", exc)
+		clean_url = source_url
+		clean_blob_url = None
+		quality_score = 0.0
+
+	response_payload = BackgroundRemovalResponse(
+		originalImageURL=source_url,
+		cleanedImageURL=clean_url,
+		maskURL=None,
+		qualityScore=quality_score,
+	).model_dump(by_alias=True)
+
+	return api_success(response_payload)

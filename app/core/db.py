@@ -1,11 +1,21 @@
-from typing import Generator, Optional
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from __future__ import annotations
+
+from typing import AsyncGenerator, Optional
+
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 
-_engine = None
-_SessionLocal: Optional[sessionmaker] = None
+_engine: Optional[AsyncEngine] = None
+_SessionLocal: Optional[async_sessionmaker[AsyncSession]] = None
+
+
+def _ensure_async_url(url: str) -> str:
+	if url.startswith("postgresql+asyncpg://"):
+		return url
+	if url.startswith("postgresql://"):
+		return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+	return url
 
 
 def init_engine_and_session() -> None:
@@ -14,16 +24,14 @@ def init_engine_and_session() -> None:
 		return
 	if not settings.DATABASE_URL:
 		raise RuntimeError("DATABASE_URL is not configured. Set it in the environment or .env file.")
-	_engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, future=True)
-	_SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False, future=True)
+	database_url = _ensure_async_url(settings.DATABASE_URL)
+	_engine = create_async_engine(database_url, pool_pre_ping=True, future=True)
+	_SessionLocal = async_sessionmaker(bind=_engine, expire_on_commit=False)
 
 
-def get_db() -> Generator[Session, None, None]:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
 	if _SessionLocal is None:
 		init_engine_and_session()
 	assert _SessionLocal is not None
-	db = _SessionLocal()
-	try:
-		yield db
-	finally:
-		db.close()
+	async with _SessionLocal() as session:
+		yield session

@@ -94,14 +94,6 @@ class StorageService:
 		upload_url = f"{blob_client.url}?{sas_token}"
 		return upload_url, cdn_file_url
 
-	def asset_part_url(self, user_id: str, blueprint_id: str, asset_id: str, part_id: str, name: str, ext: str) -> str:
-		key = f"users/{user_id}/blueprints/{blueprint_id}/asset/{asset_id}/parts/{part_id}-{quote(name)}.{ext}"
-		return f"{settings.CDN_BASE_URL}/{key}"
-
-	def blueprint_source_image_url(self, user_id: str, blueprint_id: str, original_filename: str) -> str:
-		key = f"users/{user_id}/blueprints/{blueprint_id}/source/{quote(original_filename)}"
-		return f"{settings.CDN_BASE_URL}/{key}"
-
 	def upload_file_content(self, user_id: str, filename: str, content_type: Optional[str], stream: BinaryIO) -> tuple[str, str]:
 		"""Upload file content and return both CDN URL and blob URL."""
 		client = self._get_blob_service_client()

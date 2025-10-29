@@ -80,6 +80,17 @@ def debug_inference_endpoint(provider_uid: str):
 		})
 
 
+def _job_public_id(job_id: uuid.UUID) -> str:
+	return f"job-{job_id}"
+
+
+def _parse_job_id(raw_id: str) -> uuid.UUID:
+	value = raw_id
+	if value.startswith("job-"):
+		value = value[4:]
+	return uuid.UUID(value)
+
+
 def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 	"""Process a completed job by uploading the asset and creating database records"""
 	try:
@@ -201,7 +212,7 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 				
 				# Return the job status with blob URLs instead of CDN URLs
 				return api_success({
-					"id": str(job.id),
+					"id": _job_public_id(job.id),
 					"status": job.status.value,
 					"assetId": str(asset.id),
 					"glburl": glb_blob_url,
@@ -266,7 +277,7 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 				
 				# Return the job status with blob URL and conversion failure info
 				return api_success({
-					"id": str(job.id),
+					"id": _job_public_id(job.id),
 					"status": job.status.value,
 					"assetId": str(asset.id),
 					"glburl": blob_url,
@@ -321,7 +332,7 @@ def _process_completed_job(job: Job, resp, user_id: str, db: Session, logger):
 			
 			# Return the job status with blob URL instead of CDN URL
 			return api_success({
-				"id": str(job.id),
+				"id": _job_public_id(job.id),
 				"status": job.status.value,
 				"assetId": str(asset.id),
 				"glburl": blob_url,
@@ -500,7 +511,7 @@ def create_job(payload: CreateJobRequest, user_id: str = Depends(get_current_use
 
     logger.info("Job created id=%s (model_id=%s) for user=%s", job.id, uid, user_id)
 
-    return api_success({"id": str(job.id), "status": job.status.value, "assetId": None})
+    return api_success({"id": _job_public_id(job.id), "status": job.status.value, "assetId": None})
 
 
 @router.get("/jobs/{id}")
@@ -509,7 +520,7 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 	logger.info("=== GET /jobs/%s called by user %s ===", id, user_id)
 	
 	try:
-		job_id = uuid.UUID(id)
+		job_id = _parse_job_id(id)
 		logger.info("Parsed job ID: %s", job_id)
 	except ValueError:
 		logger.error("Invalid job ID format: %s", id)
@@ -586,21 +597,21 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 				else:
 					logger.warning("Inference server returned error status: %s, body: %s", resp.status_code, resp.text)
 					# Return error status wrapped in api_success for consistency
-					return api_success({
-						"error": "Inference server error",
-						"status_code": resp.status_code,
-						"message": resp.text,
-						"job_id": str(job.id)
-					})
+				return api_success({
+					"error": "Inference server error",
+					"status_code": resp.status_code,
+					"message": resp.text,
+					"jobId": _job_public_id(job.id)
+				})
 		except Exception as e:
 			logger.warning("Provider status request failed for url=%s: %s", inference_url, str(e))
 			# Return error information wrapped in api_success
-			return api_success({
-				"error": "Connection to inference server failed",
-				"message": str(e),
-				"job_id": str(job.id),
-				"inference_url": inference_url
-			})
+		return api_success({
+			"error": "Connection to inference server failed",
+			"message": str(e),
+			"jobId": _job_public_id(job.id),
+			"inference_url": inference_url
+		})
 
 	# If no provider UID or all requests failed, return basic job status
 	logger.info("=== RETURNING FALLBACK RESPONSE ===")
@@ -653,7 +664,7 @@ def get_job(id: str, user_id: str = Depends(get_current_user_id), db: Session = 
 	usdz_response_url = blob_urls.get("usdz", usdz_url)
 	
 	response_data = {
-		"id": str(job.id), 
+		"id": _job_public_id(job.id), 
 		"status": job.status.value, 
 		"assetId": asset_id, 
 		"glburl": glb_response_url,

@@ -1,29 +1,31 @@
-# Use an official Python runtime
 FROM python:3.11-slim
 
-# Set working dir
+ENV UV_SYSTEM_PYTHON=1 \
+	PYTHONUNBUFFERED=1 \
+	PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
-# Install build deps, copy requirements, install packages
-COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential gcc \
-  && pip install --no-cache-dir -r requirements.txt \
-  && apt-get purge -y --auto-remove build-essential gcc \
-  && rm -rf /var/lib/apt/lists/*
+		curl \
+		build-essential \
+		gcc \
+	&& curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --install-dir /usr/local/bin \
+	&& rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml uv.lock ./
+
+RUN uv sync --frozen --system \
+	&& apt-get purge -y --auto-remove curl build-essential gcc \
+	&& rm -rf ~/.cache/uv /var/lib/apt/lists/*
+
+COPY . .
 
 # Verify USD command-line tools are available after installation
 RUN python -c "import pxr; print('USD Python bindings available')" || echo "USD Python bindings not available"
 RUN which usdzip || echo "usdzip command not found - will use manual fallback"
 
-# Copy application code
-COPY . .
-
-# Expose port expected by Azure ($PORT environment variable is set by App Service)
 ENV PORT=8080
 EXPOSE ${PORT}
 
-# If your app is main.py with `app = FastAPI()` use main:app
-# Use Gunicorn with Uvicorn worker (good for production)
-# Use shell form so $PORT (set by Azure) is respected, defaulting to 8080 locally
-CMD ["sh", "-c", "gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:${PORT:-8080} app.main:app"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "${PORT:-8080}"]

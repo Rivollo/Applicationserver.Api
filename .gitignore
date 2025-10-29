@@ -3,6 +3,19 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# macOS / OS generated files
+.DS_Store
+
+# Local logs and telemetry
+.server.log
+*.log
+
+# Local runtime storage (never commit generated assets)
+storage/
+
+# Design mockups and exported media
+screen/
+
 # C extensions
 *.so
 

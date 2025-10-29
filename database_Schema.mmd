@@ -1,0 +1,234 @@
+erDiagram
+  USERS ||--o{ ORG_MEMBERS : joins
+  ORGANIZATIONS ||--o{ ORG_MEMBERS : has
+
+  USERS ||--o{ SUBSCRIPTIONS : owns
+  PLANS ||--o{ SUBSCRIPTIONS : governs
+  SUBSCRIPTIONS ||--o{ LICENSE_ASSIGNMENTS : grants
+  USERS ||--o{ LICENSE_ASSIGNMENTS : receives
+
+  ORGANIZATIONS ||--o{ PRODUCTS : owns
+  USERS ||--o{ PRODUCTS : created_by
+  PRODUCTS ||--o| CONFIGURATORS : has
+  PRODUCTS ||--o{ HOTSPOTS : has
+  PRODUCTS ||--o{ JOBS : has
+  PRODUCTS ||--o{ PUBLISH_LINKS : publishes
+  ORGANIZATIONS ||--o{ ASSETS : stores
+  PRODUCTS ||--o{ GALLERY_ITEMS : listed_in
+  GALLERIES ||--o{ GALLERY_ITEMS : contains
+
+  ORGANIZATIONS ||--o{ ANALYTICS_EVENTS : records
+  PRODUCTS ||--o{ ANALYTICS_EVENTS : records
+  PUBLISH_LINKS ||--o{ ANALYTICS_EVENTS : via
+  ORGANIZATIONS ||--o{ ANALYTICS_DAILY_PRODUCT : aggregates
+  PRODUCTS ||--o{ ANALYTICS_DAILY_PRODUCT : aggregates
+
+  USERS ||--o{ AUTH_IDENTITIES : has
+  USERS ||--o{ EMAIL_VERIFICATIONS : verifies
+  USERS ||--o{ PASSWORD_RESETS : resets
+
+  USERS ||--o{ ACTIVITY_LOGS : acts
+  ORGANIZATIONS ||--o{ ACTIVITY_LOGS : in
+  USERS ||--o{ NOTIFICATIONS : receives
+  USERS ||--o| USER_NOTIFICATION_PREFS : config
+
+  USERS {
+    uuid id PK
+    string email
+    string password_hash
+    string name
+    string avatar_url
+    datetime created_at
+  }
+
+  ORGANIZATIONS {
+    uuid id PK
+    string name
+    string slug
+    string branding
+  }
+
+  ORG_MEMBERS {
+    uuid org_id FK
+    uuid user_id FK
+    string role
+  }
+
+  PLANS {
+    uuid id PK
+    string code
+    string name
+    string quotas
+  }
+
+  SUBSCRIPTIONS {
+    uuid id PK
+    uuid user_id FK
+    uuid plan_id FK
+    string status
+    int seats_purchased
+    string billing
+    datetime current_period_start
+    datetime current_period_end
+  }
+
+  LICENSE_ASSIGNMENTS {
+    uuid id PK
+    uuid subscription_id FK
+    uuid user_id FK
+    string status
+    string limits
+    string usage_counters
+    datetime created_at
+  }
+
+  ASSETS {
+    uuid id PK
+    uuid org_id FK
+    string type
+    string url
+    string mime_type
+    int size_bytes
+  }
+
+  PRODUCTS {
+    uuid id PK
+    uuid org_id FK
+    string name
+    string slug
+    string status
+    uuid model_asset_id FK
+    uuid created_by FK
+  }
+
+  CONFIGURATORS {
+    uuid id PK
+    uuid product_id FK
+    string settings
+  }
+
+  HOTSPOTS {
+    uuid id PK
+    uuid product_id FK
+    string label
+    string description
+    float pos_x
+    float pos_y
+    float pos_z
+    string text_font
+    string text_color
+    string bg_color
+    string action_type
+    string action_payload
+    int order_index
+    datetime created_at
+  }
+
+  JOBS {
+    uuid id PK
+    uuid product_id FK
+    uuid image_asset_id FK
+    uuid model_asset_id FK
+    string status
+    string engine
+    datetime completed_at
+  }
+
+  PUBLISH_LINKS {
+    uuid id PK
+    uuid product_id FK
+    string public_id
+    boolean is_enabled
+    datetime expires_at
+    string password_hash
+  }
+
+  GALLERIES {
+    uuid id PK
+    uuid org_id FK
+    string name
+    string slug
+    boolean is_public
+  }
+
+  GALLERY_ITEMS {
+    uuid id PK
+    uuid gallery_id FK
+    uuid product_id FK
+    int order_index
+  }
+
+  ANALYTICS_EVENTS {
+    int id PK
+    uuid org_id FK
+    uuid product_id FK
+    uuid publish_link_id FK
+    string event_type
+    datetime occurred_at
+    string payload
+  }
+
+  ANALYTICS_DAILY_PRODUCT {
+    date day PK
+    uuid org_id FK
+    uuid product_id FK
+    int views
+    int engaged
+    int adds_from_3d
+  }
+
+  AUTH_IDENTITIES {
+    uuid id PK
+    uuid user_id FK
+    string provider
+    string provider_user_id
+    string email
+    datetime last_login_at
+    string meta
+  }
+
+  EMAIL_VERIFICATIONS {
+    uuid id PK
+    uuid user_id FK
+    string token
+    datetime expires_at
+    datetime used_at
+  }
+
+  PASSWORD_RESETS {
+    uuid id PK
+    uuid user_id FK
+    string token
+    datetime expires_at
+    datetime used_at
+  }
+
+  ACTIVITY_LOGS {
+    uuid id PK
+    uuid actor_user_id FK
+    uuid org_id FK
+    string target_type
+    uuid target_id
+    string action
+    string ip
+    string user_agent
+    datetime occurred_at
+    string metadata
+  }
+
+  NOTIFICATIONS {
+    uuid id PK
+    uuid user_id FK
+    string type
+    string title
+    string body
+    string data
+    datetime read_at
+    datetime created_at
+  }
+
+  USER_NOTIFICATION_PREFS {
+    uuid user_id PK
+    string channels
+    string muted_types
+  }

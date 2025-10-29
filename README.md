@@ -4,11 +4,12 @@ FastAPI implementation for the mobile app, aligned with `API docs/openapi.yaml`.
 
 ### Quickstart
 
-1. Create and activate a virtualenv, then install deps:
+1. Create and activate a virtual env with `uv`, then install dependencies:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv sync
 ```
 
 2. Create a `.env` file (or export env vars) with at least:
@@ -37,7 +38,7 @@ MODEL_SERVICE_URL=mock://local
 3. Run the server:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Open docs at http://localhost:8000/docs

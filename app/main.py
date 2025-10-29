@@ -11,10 +11,17 @@ from opentelemetry.trace import get_current_span
 from app.core.config import settings
 from app.api.routes.auth import router as auth_router
 from app.api.routes.users import router as users_router
+from app.api.routes.products import router as products_router
 from app.api.routes.uploads import router as uploads_router
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.assets import router as assets_router
-from app.api.routes.blueprints import router as blueprints_router
+from app.api.routes.subscriptions import router as subscriptions_router
+from app.api.routes.galleries import router as galleries_router
+from app.api.routes.branding import router as branding_router
+from app.api.routes.analytics import router as analytics_router
+from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.search import router as search_router
+from app.api.routes.health import router as health_router
 from app.utils.envelopes import api_success, api_error
 from app.core.db import init_engine_and_session
 
@@ -82,12 +89,19 @@ app.add_middleware(
 _api_prefix = settings.API_PREFIX.rstrip("/")
 
 # Include routers
+app.include_router(health_router, prefix=_api_prefix)
 app.include_router(auth_router, prefix=_api_prefix)
 app.include_router(users_router, prefix=_api_prefix)
+app.include_router(subscriptions_router, prefix=_api_prefix)
+app.include_router(products_router, prefix=_api_prefix)
+app.include_router(galleries_router, prefix=_api_prefix)
+app.include_router(branding_router, prefix=_api_prefix)
+app.include_router(analytics_router, prefix=_api_prefix)
+app.include_router(dashboard_router, prefix=_api_prefix)
+app.include_router(search_router, prefix=_api_prefix)
 app.include_router(uploads_router, prefix=_api_prefix)
 app.include_router(jobs_router, prefix=_api_prefix)
 app.include_router(assets_router, prefix=_api_prefix)
-app.include_router(blueprints_router, prefix=_api_prefix)
 
 
 # Structured request logging (includes trace correlation where available)
