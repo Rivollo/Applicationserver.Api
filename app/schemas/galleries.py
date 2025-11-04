@@ -46,7 +46,7 @@ class GalleryResponse(GalleryBase):
     asset_count: int = Field(..., alias="assetCount")
     status: str
     created_at: datetime = Field(..., alias="createdAt")
-    updated_at: datetime = Field(..., alias="updatedAt")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
 
     class Config:
         from_attributes = True

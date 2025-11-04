@@ -1,5 +1,6 @@
 """Subscription and plan management routes."""
 
+import json
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -79,8 +80,15 @@ async def get_my_subscription(
             trial_started = subscription.trial_end_at - timedelta(days=7)
 
     # Get usage counters
-    usage = license_assignment.usage_counters or {}
-    limits = license_assignment.limits or {}
+    limits = getattr(license_assignment, "_limits_dict", None)
+    if limits is None:
+        limits = json.loads(license_assignment.limits) if license_assignment.limits else {}
+        license_assignment._limits_dict = limits  # cache for downstream calls
+
+    usage = getattr(license_assignment, "_usage_dict", None)
+    if usage is None:
+        usage = json.loads(license_assignment.usage_counters) if license_assignment.usage_counters else {}
+        license_assignment._usage_dict = usage
 
     # Count products
     result = await db.execute(

@@ -38,15 +38,23 @@ class ActivityService:
 
             user_agent = request.headers.get("user-agent")
 
+        metadata_value: Optional[str]
+        if metadata is None:
+            metadata_value = None
+        else:
+            import json
+
+            metadata_value = json.dumps(metadata)
+
         activity = ActivityLog(
-            user_id=user_id,
+            actor_user_id=user_id,
             org_id=org_id,
             action=action,
             target_type=target_type,
             target_id=target_id,
             ip_address=ip_address,
             user_agent=user_agent,
-            activity_metadata=metadata or {},
+            activity_metadata=metadata_value,
         )
 
         db.add(activity)

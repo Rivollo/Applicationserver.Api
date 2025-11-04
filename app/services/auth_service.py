@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models.models import AuthIdentity, AuthProvider, Organization, OrgMember, OrgRole, User
+from app.models.models import AuthIdentity, AuthProvider, User
 from app.services.licensing_service import LicensingService
 
 
@@ -42,22 +42,6 @@ class AuthService:
             email=email.lower(),
         )
         db.add(identity)
-
-        # Create default organization for user
-        org = Organization(
-            name=f"{user.name}'s Organization",
-            slug=f"org-{user.id}",
-        )
-        db.add(org)
-        await db.flush()
-
-        # Add user as owner of organization
-        org_member = OrgMember(
-            org_id=org.id,
-            user_id=user.id,
-            role=OrgRole.OWNER,
-        )
-        db.add(org_member)
 
         # Create free plan license for user
         await LicensingService.create_free_plan_license(db, user)

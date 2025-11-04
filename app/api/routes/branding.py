@@ -3,11 +3,13 @@
 import uuid
 from typing import Optional
 
+import json
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DB
 from app.models.models import Organization, OrgMember
+from app.services.organization_service import OrganizationService
 from app.schemas.branding import BrandingResponse, BrandingUpdate
 from app.utils.envelopes import api_success
 
@@ -15,11 +17,8 @@ router = APIRouter(tags=["branding"])
 
 
 async def _get_user_org_id(db: DB, user_id: uuid.UUID) -> Optional[uuid.UUID]:
-    """Get the user's primary organization ID."""
-    result = await db.execute(
-        select(OrgMember.org_id).where(OrgMember.user_id == user_id).limit(1)
-    )
-    return result.scalar_one_or_none()
+    """Get or create the user's primary organization ID."""
+    return await OrganizationService.get_or_create_org_id(db, user_id)
 
 
 @router.get("/branding", response_model=dict)
@@ -31,10 +30,7 @@ async def get_branding(
     org_id = await _get_user_org_id(db, current_user.id)
 
     if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organization not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
 
     result = await db.execute(
         select(Organization).where(
@@ -50,7 +46,10 @@ async def get_branding(
             detail="Organization not found",
         )
 
-    branding = org.branding or {}
+    try:
+        branding = json.loads(org.branding) if org.branding else {}
+    except Exception:
+        branding = {}
 
     response_data = BrandingResponse(
         logoUrl=branding.get("logo_url"),
@@ -73,10 +72,7 @@ async def update_branding(
     org_id = await _get_user_org_id(db, current_user.id)
 
     if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organization not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
 
     result = await db.execute(
         select(Organization).where(
@@ -93,7 +89,10 @@ async def update_branding(
         )
 
     # Update branding
-    branding = org.branding or {}
+    try:
+        branding = json.loads(org.branding) if org.branding else {}
+    except Exception:
+        branding = {}
 
     if payload.logo_url is not None:
         branding["logo_url"] = payload.logo_url
@@ -106,7 +105,7 @@ async def update_branding(
     if payload.tagline is not None:
         branding["tagline"] = payload.tagline
 
-    org.branding = branding
+    org.branding = json.dumps(branding)
 
     await db.commit()
     await db.refresh(org)

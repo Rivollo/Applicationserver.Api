@@ -20,9 +20,10 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB, UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID as PGUUID
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.types import TIMESTAMP
 
 from app.models.base import Base
@@ -32,16 +33,34 @@ class UUIDMixin:
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
 
-class CreatedAtMixin:
-    created_at: Mapped[datetime] = mapped_column(
+class AuditMixin:
+    """Audit fields that exist in all tables: created_by, created_date, updated_by, updated_date"""
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True))
+    created_date: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
+    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True))
+    updated_date: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
 
 
-class TimestampMixin(CreatedAtMixin):
-    updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+class CreatedAtMixin:
+    """For tables that have created_at column directly (in addition to audit fields)"""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False
     )
+
+
+class TimestampMixin(AuditMixin):
+    """Map created_at/updated_at to created_date/updated_date for backward compatibility"""
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
+
+    @property
+    def updated_at(self) -> Optional[datetime]:
+        return self.updated_date
 
 
 class SoftDeleteMixin:
@@ -109,14 +128,15 @@ class AuthProvider(str, enum.Enum):
     EMAIL = "email"
 
 
-class Organization(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
+class Organization(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "tbl_organizations"
 
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False)
-    branding: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, server_default=text("'{}'::jsonb"), nullable=False
-    )
+    # branding is TEXT in database, storing JSON as string
+    branding: Mapped[Optional[str]] = mapped_column(Text)
+    # Virtual column - organizations table doesn't have deleted_at in database
+    deleted_at = column_property(literal_column("NULL::timestamptz"))
 
     __table_args__ = (
         Index(
@@ -130,10 +150,19 @@ class Organization(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     members: Mapped[list["OrgMember"]] = relationship("OrgMember", back_populates="organization")
     assets: Mapped[list["Asset"]] = relationship("Asset", back_populates="organization")
     products: Mapped[list["Product"]] = relationship("Product", back_populates="organization")
-    jobs: Mapped[list["Job"]] = relationship("Job", back_populates="organization")
+    jobs: Mapped[list["Job"]] = relationship(
+        "Job",
+        secondary=lambda: Product.__table__,
+        primaryjoin=lambda: Organization.id == Product.__table__.c.org_id,
+        secondaryjoin=lambda: Job.product_id == Product.__table__.c.id,
+        viewonly=True,
+        overlaps="products,jobs",
+        foreign_keys=lambda: (Product.__table__.c.org_id, Job.product_id),
+    )
 
 
-class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
+class User(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
+    """User model - has BOTH created_at AND audit fields (created_date, etc.)"""
     __tablename__ = "tbl_users"
 
     email: Mapped[str] = mapped_column(CITEXT, unique=True, nullable=False)
@@ -141,12 +170,20 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     name: Mapped[Optional[str]] = mapped_column(Text)
     avatar_url: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Virtual column - users table doesn't have deleted_at in database
+    deleted_at = column_property(literal_column("NULL::timestamptz"))
+
+    # Property for backward compatibility
+    @property
+    def updated_at(self) -> Optional[datetime]:
+        return self.updated_date
+
     subscriptions: Mapped[list["Subscription"]] = relationship("Subscription", back_populates="user")
     licenses: Mapped[list["LicenseAssignment"]] = relationship("LicenseAssignment", back_populates="user")
     identities: Mapped[list["AuthIdentity"]] = relationship("AuthIdentity", back_populates="user")
 
 
-class OrgMember(CreatedAtMixin, Base):
+class OrgMember(AuditMixin, Base):
     __tablename__ = "tbl_org_members"
     __table_args__ = (UniqueConstraint("org_id", "user_id", name="uq_org_user"),)
 
@@ -156,18 +193,29 @@ class OrgMember(CreatedAtMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), primary_key=True
     )
-    role: Mapped[OrgRole] = mapped_column(Enum(OrgRole, name="org_role"), nullable=False)
+    role: Mapped[OrgRole] = mapped_column(Enum(OrgRole, name="org_role", native_enum=False), nullable=False)
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="members")
     user: Mapped[User] = relationship("User")
 
 
-class Plan(UUIDMixin, Base):
+class Plan(UUIDMixin, AuditMixin, Base):
     __tablename__ = "tbl_mstr_plans"
 
     code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    quotas: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
+    # quotas is TEXT in database, storing JSON as string
+    quotas: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
 
     subscriptions: Mapped[list["Subscription"]] = relationship("Subscription", back_populates="plan")
 
@@ -183,23 +231,36 @@ class Subscription(UUIDMixin, Base):
         PGUUID(as_uuid=True), ForeignKey("tbl_mstr_plans.id"), nullable=False
     )
     status: Mapped[SubscriptionStatus] = mapped_column(
-        Enum(SubscriptionStatus, name="subscription_status"), nullable=False
+        Enum(SubscriptionStatus, name="subscription_status", native_enum=False), nullable=False
     )
     seats_purchased: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
-    billing: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
-    current_period_start: Mapped[datetime] = mapped_column(
+    # billing column is TEXT in database, but we treat it as JSONB in Python
+    billing: Mapped[Optional[str]] = mapped_column(Text)
+
+    # These columns exist in the database as nullable timestamps
+    current_period_start: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    current_period_end: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+
+    # Audit fields that exist in the database
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True))
+    created_date: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
-    current_period_end: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-    trial_end_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-    renews_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True))
+    updated_date: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+
+    # Virtual columns - these don't exist in the actual database table
+    # Keeping as properties for backward compatibility with code that references them
+    trial_end_at = column_property(literal_column("NULL::timestamptz"))
+    renews_at = column_property(literal_column("NULL::timestamptz"))
 
     user: Mapped[User] = relationship("User", back_populates="subscriptions")
     plan: Mapped[Plan] = relationship("Plan", back_populates="subscriptions")
     licenses: Mapped[list["LicenseAssignment"]] = relationship("LicenseAssignment", back_populates="subscription")
 
 
-class LicenseAssignment(UUIDMixin, CreatedAtMixin, Base):
+class LicenseAssignment(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
+    """LicenseAssignment - has BOTH created_at AND audit fields"""
     __tablename__ = "tbl_license_assignments"
     __table_args__ = (
         UniqueConstraint("subscription_id", "user_id", name="uq_license_subscription_user"),
@@ -213,23 +274,29 @@ class LicenseAssignment(UUIDMixin, CreatedAtMixin, Base):
         PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     status: Mapped[LicenseStatus] = mapped_column(
-        Enum(LicenseStatus, name="license_status"), nullable=False, server_default=text("'active'"),
+        Enum(LicenseStatus, name="license_status", native_enum=False), nullable=False, server_default=text("'active'"),
     )
-    limits: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
-    usage_counters: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
+    # limits and usage_counters are TEXT in database, storing JSON as string
+    limits: Mapped[Optional[str]] = mapped_column(Text)
+    usage_counters: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Property for backward compatibility
+    @property
+    def updated_at(self) -> Optional[datetime]:
+        return self.updated_date
 
     subscription: Mapped[Subscription] = relationship("Subscription", back_populates="licenses")
     user: Mapped[User] = relationship("User", back_populates="licenses")
 
 
-class Asset(UUIDMixin, CreatedAtMixin, Base):
+class Asset(UUIDMixin, AuditMixin, Base):
     __tablename__ = "tbl_assets"
     __table_args__ = (Index("ix_assets_org_type", "org_id", "type"),)
 
     org_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
     )
-    type: Mapped[AssetType] = mapped_column(Enum(AssetType, name="asset_type"), nullable=False)
+    type: Mapped[AssetType] = mapped_column(Enum(AssetType, name="asset_type", native_enum=False), nullable=False)
     storage: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'azure_blob'"))
     url: Mapped[str] = mapped_column(Text, nullable=False)
     mime_type: Mapped[Optional[str]] = mapped_column(String)
@@ -237,14 +304,16 @@ class Asset(UUIDMixin, CreatedAtMixin, Base):
     width: Mapped[Optional[int]] = mapped_column(Integer)
     height: Mapped[Optional[int]] = mapped_column(Integer)
     checksum_sha256: Mapped[Optional[str]] = mapped_column(String)
-    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
-    )
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="assets")
 
 
-class Product(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
+class Product(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "tbl_products"
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_product_org_slug"),
@@ -256,24 +325,22 @@ class Product(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[ProductStatus] = mapped_column(
-        Enum(ProductStatus, name="product_status"), nullable=False, server_default=text("'draft'"),
+        Enum(ProductStatus, name="product_status", native_enum=False), nullable=False, server_default=text("'draft'"),
     )
-    cover_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_assets.id", ondelete="SET NULL")
-    )
+    # cover_asset_id column no longer exists in some database snapshots; keep virtual
+    cover_asset_id = column_property(literal_column("NULL::uuid"))
     model_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_assets.id", ondelete="SET NULL")
     )
-    tags: Mapped[list[str]] = mapped_column(
-        ARRAY(String), server_default=text("'{}'::text[]"), nullable=False
-    )
-    product_metadata: Mapped[dict[str, Any]] = mapped_column(
-        "metadata", JSONB, server_default=text("'{}'::jsonb"), nullable=False
-    )
-    published_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
-    )
+    # tags column absent in legacy snapshot; expose as virtual empty array
+    tags = column_property(literal_column("'{}'::text[]"))
+    # Note: products table doesn't have metadata column in actual DB
+    # Keeping as virtual column for backward compatibility
+    product_metadata = column_property(literal_column("'{}'::jsonb"))
+    published_at = column_property(literal_column("NULL::timestamptz"))
+    # created_by, updated_by from TimestampMixin -> AuditMixin
+    # Virtual column - products table doesn't have deleted_at in database
+    deleted_at = column_property(literal_column("NULL::timestamptz"))
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="products")
     configurator: Mapped[Optional["Configurator"]] = relationship(
@@ -288,18 +355,25 @@ class Product(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     jobs: Mapped[list["Job"]] = relationship("Job", back_populates="product")
 
 
-class Configurator(UUIDMixin, Base):
+class Configurator(UUIDMixin, AuditMixin, Base):
     __tablename__ = "tbl_configurators"
 
     product_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
+    # settings is TEXT in database, storing JSON as string
+    settings: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
 
     product: Mapped[Product] = relationship("Product", back_populates="configurator")
 
 
-class Hotspot(UUIDMixin, CreatedAtMixin, Base):
+class Hotspot(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
+    """Hotspot - has BOTH created_at AND audit fields"""
     __tablename__ = "tbl_hotspots"
     __table_args__ = (
         Index("ix_hotspots_product_order", "product_id", "order_index"),
@@ -320,44 +394,55 @@ class Hotspot(UUIDMixin, CreatedAtMixin, Base):
     text_color: Mapped[Optional[str]] = mapped_column(String)
     bg_color: Mapped[Optional[str]] = mapped_column(String)
     action_type: Mapped[HotspotActionType] = mapped_column(
-        Enum(HotspotActionType, name="hotspot_action"),
+        Enum(HotspotActionType, name="hotspot_action", native_enum=False),
         nullable=False,
         server_default=text("'none'"),
     )
-    action_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
+    # action_payload is TEXT in database, storing JSON as string
+    action_payload: Mapped[Optional[str]] = mapped_column(Text)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    # Property for backward compatibility
+    @property
+    def updated_at(self) -> Optional[datetime]:
+        return self.updated_date
 
     product: Mapped[Product] = relationship("Product", back_populates="hotspots")
 
 
-class Job(UUIDMixin, CreatedAtMixin, Base):
+class Job(UUIDMixin, AuditMixin, Base):
     __tablename__ = "tbl_jobs"
     __table_args__ = (
         Index("ix_jobs_product_status", "product_id", "status"),
-        Index("ix_jobs_org", "org_id"),
     )
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
-    )
+    # Note: org_id not in actual database, made virtual for backward compatibility
+    @property
+    def org_id(self) -> Optional[uuid.UUID]:
+        return self.product.org_id if hasattr(self, 'product') and self.product else None
+
     product_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
     )
-    image_asset_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_assets.id"), nullable=False
+    image_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_assets.id")
     )
     model_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tbl_assets.id"))
-    status: Mapped[JobStatus] = mapped_column(
-        Enum(JobStatus, name="job_status"), nullable=False, server_default=text("'pending'"),
-    )
-    engine: Mapped[Optional[str]] = mapped_column(String)
-    gpu_type: Mapped[Optional[str]] = mapped_column(String)
-    credits_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
-    started_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    engine: Mapped[Optional[str]] = mapped_column(Text)
     completed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-    error: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
 
-    organization: Mapped[Organization] = relationship("Organization", back_populates="jobs")
+    # Virtual columns - these don't exist in actual database
+    gpu_type = column_property(literal_column("NULL::text"))
+    credits_used = column_property(literal_column("1::integer"))
+    started_at = column_property(literal_column("NULL::timestamptz"))
+    error = column_property(literal_column("'{}'::jsonb"))
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
+
     product: Mapped[Product] = relationship("Product", back_populates="jobs")
 
 
@@ -385,7 +470,7 @@ class PublishLink(UUIDMixin, CreatedAtMixin, Base):
     product: Mapped[Product] = relationship("Product", back_populates="publish_links")
 
 
-class Gallery(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
+class Gallery(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "tbl_galleries"
     __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_gallery_org_slug"),)
 
@@ -395,10 +480,13 @@ class Gallery(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
+    # settings column doesn't exist in DB snapshot; expose virtual empty object
+    settings = column_property(literal_column("'{}'::jsonb"))
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
     )
+    # Virtual column - galleries table doesn't have deleted_at in database
+    deleted_at = column_property(literal_column("NULL::timestamptz"))
 
     items: Mapped[list["GalleryItem"]] = relationship(
         "GalleryItem", back_populates="gallery", cascade="all, delete-orphan"
@@ -474,18 +562,24 @@ class AnalyticsDailyProduct(Base):
     adds_from_3d: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
 
-class AuthIdentity(UUIDMixin, CreatedAtMixin, Base):
+class AuthIdentity(UUIDMixin, AuditMixin, Base):
     __tablename__ = "tbl_auth_identities"
     __table_args__ = (UniqueConstraint("provider", "provider_user_id", name="uq_auth_identity_provider"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
-    provider: Mapped[AuthProvider] = mapped_column(Enum(AuthProvider, name="auth_provider"), nullable=False)
+    provider: Mapped[AuthProvider] = mapped_column(Enum(AuthProvider, name="auth_provider", native_enum=False), nullable=False)
     provider_user_id: Mapped[str] = mapped_column(String, nullable=False)
-    email: Mapped[str] = mapped_column(CITEXT, nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(CITEXT)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
+    # meta is TEXT in database, storing JSON as string
+    meta: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
 
     user: Mapped[User] = relationship("User", back_populates="identities")
 
@@ -512,24 +606,48 @@ class PasswordReset(UUIDMixin, Base):
     used_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
 
 
-class ActivityLog(UUIDMixin, CreatedAtMixin, Base):
+class ActivityLog(UUIDMixin, AuditMixin, Base):
     __tablename__ = "tbl_activity_logs"
-    __table_args__ = (Index("ix_activity_logs_org_created_at", "org_id", "created_at"),)
+    __table_args__ = (Index("ix_activity_logs_org_occurred_at", "org_id", "occurred_at"),)
 
+    actor_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
+    )
     org_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="SET NULL")
     )
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
-    )
-    action: Mapped[str] = mapped_column(String, nullable=False)
-    target_type: Mapped[Optional[str]] = mapped_column(String)
-    target_id: Mapped[Optional[str]] = mapped_column(String)
-    ip_address: Mapped[Optional[str]] = mapped_column(String)
+    target_type: Mapped[str] = mapped_column(Text, nullable=False)
+    target_id: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True))
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    ip: Mapped[Optional[str]] = mapped_column(Text)
     user_agent: Mapped[Optional[str]] = mapped_column(Text)
-    activity_metadata: Mapped[dict[str, Any]] = mapped_column(
-        "metadata", JSONB, server_default=text("'{}'::jsonb"), nullable=False
+    occurred_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
+    # metadata is TEXT in database, storing JSON as string
+    activity_metadata: Mapped[Optional[str]] = mapped_column("metadata", Text)
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
+
+    # Alias for backward compatibility
+    @property
+    def user_id(self) -> Optional[uuid.UUID]:
+        return self.actor_user_id
+
+    @user_id.setter
+    def user_id(self, value: Optional[uuid.UUID]) -> None:
+        self.actor_user_id = value
+
+    @property
+    def ip_address(self) -> Optional[str]:
+        return self.ip
+
+    @ip_address.setter
+    def ip_address(self, value: Optional[str]) -> None:
+        self.ip = value
 
 
 class Notification(UUIDMixin, CreatedAtMixin, Base):
@@ -548,27 +666,27 @@ class Notification(UUIDMixin, CreatedAtMixin, Base):
     type: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    channel: Mapped[NotificationChannel] = mapped_column(
-        Enum(NotificationChannel, name="notification_channel"),
-        nullable=False,
-        server_default=text("'in_app'"),
-    )
-    data: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
+    # 'channel' column does not exist in DB; expose default as virtual
+    channel = column_property(literal_column("'in_app'::text"))
+    # DB stores 'data' as TEXT; services are responsible for JSON serialization
+    data: Mapped[Optional[str]] = mapped_column(Text)
     read_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
 
 
-class UserNotificationPreference(UUIDMixin, Base):
+class UserNotificationPreference(Base):
     __tablename__ = "tbl_user_notification_prefs"
-    __table_args__ = (UniqueConstraint("user_id", "notification_type", name="uq_user_notification_pref"),)
 
+    # Table has only user_id as key-like column; model it as PK for ORM
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), primary_key=True
     )
-    notification_type: Mapped[str] = mapped_column(String, nullable=False)
-    channels: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"), nullable=False)
-    muted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    # Stored as TEXT in DB; service parses as JSON/CSV
+    channels: Mapped[Optional[str]] = mapped_column(Text)
+    muted_types: Mapped[Optional[str]] = mapped_column(Text)
+    # Keep audit updated_date mapping for convenience
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        "updated_date",
+        TIMESTAMP(timezone=True),
     )
 
 

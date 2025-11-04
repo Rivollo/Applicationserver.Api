@@ -1,5 +1,6 @@
 """Licensing and subscription management service."""
 
+import json
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -22,10 +23,15 @@ class LicensingService:
                 LicenseAssignment.user_id == user_id,
                 LicenseAssignment.status == "active",
             )
-            .order_by(LicenseAssignment.created_at.desc())
+            .order_by(LicenseAssignment.created_date.desc())
             .limit(1)
         )
-        return result.scalar_one_or_none()
+        license_obj = result.scalar_one_or_none()
+        # Parse TEXT fields to dicts for backward compatibility
+        if license_obj:
+            license_obj._limits_dict = json.loads(license_obj.limits) if license_obj.limits else {}
+            license_obj._usage_dict = json.loads(license_obj.usage_counters) if license_obj.usage_counters else {}
+        return license_obj
 
     @staticmethod
     async def check_quota(
@@ -45,8 +51,15 @@ class LicensingService:
             # No active license - deny
             return False, None
 
-        limits = license.limits or {}
-        usage = license.usage_counters or {}
+        limits = getattr(license, "_limits_dict", None)
+        if limits is None:
+            limits = json.loads(license.limits) if license.limits else {}
+            license._limits_dict = limits
+
+        usage = getattr(license, "_usage_dict", None)
+        if usage is None:
+            usage = json.loads(license.usage_counters) if license.usage_counters else {}
+            license._usage_dict = usage
 
         # Get limit for this quota
         limit = limits.get(quota_key)
@@ -75,9 +88,15 @@ class LicensingService:
         if not license:
             return False
 
-        usage = license.usage_counters or {}
+        usage = getattr(license, "_usage_dict", None)
+        if usage is None:
+            usage = json.loads(license.usage_counters) if license.usage_counters else {}
+        else:
+            # Create shallow copy to avoid mutating cached dict without serialization
+            usage = dict(usage)
         usage[quota_key] = usage.get(quota_key, 0) + increment
-        license.usage_counters = usage
+        license.usage_counters = json.dumps(usage)
+        license._usage_dict = usage
 
         await db.commit()
         return True
@@ -111,14 +130,15 @@ class LicensingService:
         free_plan = result.scalar_one_or_none()
 
         if not free_plan:
+            quotas_dict = {
+                "max_products": 2,
+                "max_ai_credits_month": 5,
+                "max_public_views": 1000,
+            }
             free_plan = Plan(
                 code="free",
                 name="Free",
-                quotas={
-                    "max_products": 2,
-                    "max_ai_credits_month": 5,
-                    "max_public_views": 1000,
-                },
+                quotas=json.dumps(quotas_dict),  # Serialize to JSON string
             )
             db.add(free_plan)
             await db.flush()
@@ -133,13 +153,16 @@ class LicensingService:
         db.add(subscription)
         await db.flush()
 
+        # Parse quotas from TEXT field
+        quotas_dict = json.loads(free_plan.quotas) if free_plan.quotas else {}
+
         # Create license assignment
         license = LicenseAssignment(
             subscription_id=subscription.id,
             user_id=user.id,
             status="active",
-            limits=free_plan.quotas,
-            usage_counters={},
+            limits=json.dumps(quotas_dict),  # Serialize to JSON string
+            usage_counters=json.dumps({}),  # Serialize to JSON string
         )
         db.add(license)
         await db.commit()

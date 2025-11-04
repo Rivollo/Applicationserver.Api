@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, or_, select, cast, String
 
 from app.api.deps import CurrentUser, DB
 from app.models.models import Gallery, GalleryItem, OrgMember, Product
@@ -15,6 +15,7 @@ from app.schemas.galleries import (
     GalleryUpdate,
 )
 from app.services.licensing_service import LicensingService
+from app.services.organization_service import OrganizationService
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["galleries"])
@@ -31,11 +32,8 @@ def _slugify(text: str) -> str:
 
 
 async def _get_user_org_id(db: DB, user_id: uuid.UUID) -> Optional[uuid.UUID]:
-    """Get the user's primary organization ID."""
-    result = await db.execute(
-        select(OrgMember.org_id).where(OrgMember.user_id == user_id).limit(1)
-    )
-    return result.scalar_one_or_none()
+    """Get or create the user's primary organization ID."""
+    return await OrganizationService.get_or_create_org_id(db, user_id)
 
 
 async def _check_gallery_access(db: DB, user_id: uuid.UUID) -> bool:
@@ -171,12 +169,6 @@ async def create_gallery(
 
     org_id = await _get_user_org_id(db, current_user.id)
 
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User must belong to an organization",
-        )
-
     # Check quota (Pro = 10 galleries)
     plan_code = await LicensingService.get_user_plan_code(db, current_user.id)
     if plan_code == "pro":
@@ -198,19 +190,13 @@ async def create_gallery(
     # Generate slug
     slug = _slugify(payload.name)
 
-    # Create gallery
+    # Create gallery (schema has no settings JSON field; don't persist settings)
     gallery = Gallery(
         org_id=org_id,
         name=payload.name,
         slug=slug,
         is_public=False,
         created_by=current_user.id,
-        settings={
-            "description": payload.description,
-            "thumbnail_color": payload.thumbnail_color,
-            "thumbnail_overlay": payload.thumbnail_overlay,
-            "tags": payload.tags,
-        },
     )
 
     db.add(gallery)
@@ -259,7 +245,7 @@ async def get_gallery(
 
     result = await db.execute(
         select(Gallery).where(
-            Gallery.id == gallery_uuid if gallery_uuid else Gallery.id.like(f"{gallery_id}%"),
+            Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
             Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
@@ -278,10 +264,10 @@ async def get_gallery(
     response_data = GalleryResponse(
         id=f"gallery-{str(gallery.id)[:8]}",
         name=gallery.name,
-        description=gallery.settings.get("description"),
-        thumbnailColor=gallery.settings.get("thumbnail_color"),
-        thumbnailOverlay=gallery.settings.get("thumbnail_overlay"),
-        tags=gallery.settings.get("tags", []),
+        description=None,
+        thumbnailColor=None,
+        thumbnailOverlay=None,
+        tags=[],
         productCount=product_count,
         assetCount=product_count,
         status="ready",
@@ -318,7 +304,7 @@ async def update_gallery(
 
     result = await db.execute(
         select(Gallery).where(
-            Gallery.id == gallery_uuid if gallery_uuid else Gallery.id.like(f"{gallery_id}%"),
+            Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
             Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
@@ -333,17 +319,7 @@ async def update_gallery(
         gallery.name = payload.name
         gallery.slug = _slugify(payload.name)
 
-    settings = gallery.settings or {}
-    if payload.description is not None:
-        settings["description"] = payload.description
-    if payload.thumbnail_color is not None:
-        settings["thumbnail_color"] = payload.thumbnail_color
-    if payload.thumbnail_overlay is not None:
-        settings["thumbnail_overlay"] = payload.thumbnail_overlay
-    if payload.tags is not None:
-        settings["tags"] = payload.tags
-
-    gallery.settings = settings
+    # No settings column in DB; only update persisted fields (name/slug)
 
     await db.commit()
     await db.refresh(gallery)
@@ -357,10 +333,10 @@ async def update_gallery(
     response_data = GalleryResponse(
         id=f"gallery-{str(gallery.id)[:8]}",
         name=gallery.name,
-        description=settings.get("description"),
-        thumbnailColor=settings.get("thumbnail_color"),
-        thumbnailOverlay=settings.get("thumbnail_overlay"),
-        tags=settings.get("tags", []),
+        description=payload.description,
+        thumbnailColor=payload.thumbnail_color,
+        thumbnailOverlay=payload.thumbnail_overlay,
+        tags=payload.tags or [],
         productCount=product_count,
         assetCount=product_count,
         status="ready",
@@ -397,7 +373,7 @@ async def replace_gallery(
 
     result = await db.execute(
         select(Gallery).where(
-            Gallery.id == gallery_uuid if gallery_uuid else Gallery.id.like(f"{gallery_id}%"),
+            Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
             Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
@@ -409,12 +385,7 @@ async def replace_gallery(
 
     gallery.name = payload.name
     gallery.slug = _slugify(payload.name)
-    gallery.settings = {
-        "description": payload.description,
-        "thumbnail_color": payload.thumbnail_color,
-        "thumbnail_overlay": payload.thumbnail_overlay,
-        "tags": payload.tags,
-    }
+    # No settings field to persist
 
     await db.commit()
     await db.refresh(gallery)
@@ -466,7 +437,7 @@ async def delete_gallery(
 
     result = await db.execute(
         select(Gallery).where(
-            Gallery.id == gallery_uuid if gallery_uuid else Gallery.id.like(f"{gallery_id}%"),
+            Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
             Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
@@ -476,9 +447,8 @@ async def delete_gallery(
     if not gallery:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gallery not found")
 
-    # Soft delete
-    gallery.deleted_at = datetime.utcnow()
-
+    # Physical delete (no deleted_at column in DB snapshot)
+    await db.delete(gallery)
     await db.commit()
 
-    return api_success({"message": "Gallery deleted successfully"})
+    return api_success({"message": "Gallery deleted"})

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, or_, select, cast, String
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import CurrentUser, DB
@@ -28,6 +28,7 @@ from app.schemas.products import (
 )
 from app.services.activity_service import ActivityService
 from app.services.licensing_service import LicensingService
+from app.services.organization_service import OrganizationService
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["products"])
@@ -44,12 +45,8 @@ def _slugify(text: str) -> str:
 
 
 async def _get_user_org_id(db: DB, user_id: uuid.UUID) -> Optional[uuid.UUID]:
-    """Get the user's primary organization ID."""
-    result = await db.execute(
-        select(OrgMember.org_id).where(OrgMember.user_id == user_id).limit(1)
-    )
-    org_id = result.scalar_one_or_none()
-    return org_id
+    """Get or create user's primary organization ID."""
+    return await OrganizationService.get_or_create_org_id(db, user_id)
 
 
 @router.get("/products", response_model=dict)
@@ -75,22 +72,15 @@ async def list_products(
         Product.deleted_at.is_(None),
     )
 
-    # Apply filters
+    # Apply filters (DB has no metadata column; search name only)
     if q:
         search_pattern = f"%{q}%"
-        query = query.where(
-            or_(
-                Product.name.ilike(search_pattern),
-                Product.product_metadata["description"].astext.ilike(search_pattern),
-            )
-        )
+        query = query.where(Product.name.ilike(search_pattern))
 
     if status_filter:
         query = query.where(Product.status == status_filter)
 
-    if tags:
-        tag_list = [t.strip() for t in tags.split(",")]
-        query = query.where(Product.tags.overlap(tag_list))
+    # tags column not present in DB; ignore tags filter
 
     # Count total
     count_query = select(func.count()).select_from(query.subquery())
@@ -119,11 +109,11 @@ async def list_products(
         ProductResponse(
             id=f"prod-{str(p.id)[:8]}",
             name=p.name,
-            description=p.product_metadata.get("description"),
-            brand=p.product_metadata.get("brand"),
-            accent_color=p.product_metadata.get("accent_color", "#2563EB"),
-            accent_overlay=p.product_metadata.get("accent_overlay"),
-            tags=list(p.tags) if p.tags else [],
+            description=None,
+            brand=None,
+            accent_color="#2563EB",
+            accent_overlay=None,
+            tags=[],
             status=p.status.value,
             created_at=p.created_at,
             updated_at=p.updated_at,
@@ -156,12 +146,6 @@ async def create_product(
     """Create a new product."""
     org_id = await _get_user_org_id(db, current_user.id)
 
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User must belong to an organization",
-        )
-
     # Check quota
     allowed, quota_info = await LicensingService.check_quota(db, current_user.id, "max_products")
 
@@ -174,20 +158,13 @@ async def create_product(
     # Generate slug
     slug = _slugify(payload.name)
 
-    # Create product
+    # Create product (DB doesn't have tags/metadata columns)
     product = Product(
         org_id=org_id,
         name=payload.name,
         slug=slug,
         status=ProductStatus.DRAFT,
         created_by=current_user.id,
-        tags=payload.tags,
-        metadata={
-            "description": payload.description,
-            "brand": payload.brand,
-            "accent_color": payload.accent_color,
-            "accent_overlay": payload.accent_overlay,
-        },
     )
 
     db.add(product)
@@ -249,7 +226,7 @@ async def get_product(
         select(Product)
         .options(joinedload(Product.configurator))
         .where(
-            Product.id == prod_uuid if prod_uuid else Product.id.like(f"{product_id}%"),
+            Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
             Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
@@ -262,16 +239,18 @@ async def get_product(
     # Build configurator settings if exists
     configurator_data = None
     if product.configurator:
-        configurator_data = ConfiguratorSettings(**product.configurator.settings)
+        import json
+        cfg = json.loads(product.configurator.settings) if product.configurator.settings else {}
+        configurator_data = ConfiguratorSettings(**cfg)
 
     response_data = ProductResponse(
         id=f"prod-{str(product.id)[:8]}",
         name=product.name,
-        description=product.product_metadata.get("description"),
-        brand=product.product_metadata.get("brand"),
-        accent_color=product.product_metadata.get("accent_color", "#2563EB"),
-        accent_overlay=product.product_metadata.get("accent_overlay"),
-        tags=list(product.tags) if product.tags else [],
+        description=None,
+        brand=None,
+        accent_color="#2563EB",
+        accent_overlay=None,
+        tags=[],
         status=product.status.value,
         created_at=product.created_at,
         updated_at=product.updated_at,
@@ -302,7 +281,7 @@ async def update_product(
 
     result = await db.execute(
         select(Product).where(
-            Product.id == prod_uuid if prod_uuid else Product.id.like(f"{product_id}%"),
+            Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
             Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
@@ -327,10 +306,7 @@ async def update_product(
     if payload.accent_overlay is not None:
         metadata["accent_overlay"] = payload.accent_overlay
 
-    product.product_metadata = metadata
-
-    if payload.tags is not None:
-        product.tags = payload.tags
+    # No backing column for metadata/tags, so we don't persist them
 
     # Log activity
     await ActivityService.log_product_action(
@@ -352,7 +328,7 @@ async def update_product(
         brand=metadata.get("brand"),
         accent_color=metadata.get("accent_color", "#2563EB"),
         accent_overlay=metadata.get("accent_overlay"),
-        tags=list(product.tags) if product.tags else [],
+        tags=[],
         status=product.status.value,
         created_at=product.created_at,
         updated_at=product.updated_at,
@@ -381,7 +357,7 @@ async def replace_product(
 
     result = await db.execute(
         select(Product).where(
-            Product.id == prod_uuid if prod_uuid else Product.id.like(f"{product_id}%"),
+            Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
             Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
@@ -393,8 +369,8 @@ async def replace_product(
 
     product.name = payload.name
     product.slug = _slugify(payload.name)
-    product.tags = payload.tags
-    product.product_metadata = {
+    # No backing column for metadata/tags, so we don't persist them
+    _metadata = {
         "description": payload.description,
         "brand": payload.brand,
         "accent_color": payload.accent_color,
@@ -416,10 +392,10 @@ async def replace_product(
     response_data = ProductResponse(
         id=f"prod-{str(product.id)[:8]}",
         name=product.name,
-        description=payload.description,
-        brand=payload.brand,
-        accent_color=payload.accent_color,
-        accent_overlay=payload.accent_overlay,
+        description=_metadata.get("description"),
+        brand=_metadata.get("brand"),
+        accent_color=_metadata.get("accent_color"),
+        accent_overlay=_metadata.get("accent_overlay"),
         tags=payload.tags,
         status=product.status.value,
         created_at=product.created_at,
@@ -448,7 +424,7 @@ async def delete_product(
 
     result = await db.execute(
         select(Product).where(
-            Product.id == prod_uuid if prod_uuid else Product.id.like(f"{product_id}%"),
+            Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
             Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
@@ -458,8 +434,8 @@ async def delete_product(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
-    # Soft delete
-    product.deleted_at = datetime.utcnow()
+    # Physical delete (no deleted_at column in DB snapshot)
+    await db.delete(product)
 
     # Log activity
     await ActivityService.log_product_action(
@@ -473,7 +449,7 @@ async def delete_product(
 
     await db.commit()
 
-    return api_success({"message": "Product deleted successfully"})
+    return api_success({"message": "Product deleted"})
 
 
 @router.patch("/products/{product_id}/configurator", response_model=dict)
@@ -507,13 +483,14 @@ async def update_configurator(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
-    # Update or create configurator
+    import json
+    # Update or create configurator (store JSON as TEXT)
     if product.configurator:
-        product.configurator.settings = payload.model_dump(exclude_none=True)
+        product.configurator.settings = json.dumps(payload.model_dump(exclude_none=True))
     else:
         configurator = Configurator(
             product_id=product.id,
-            settings=payload.model_dump(exclude_none=True),
+            settings=json.dumps(payload.model_dump(exclude_none=True)),
         )
         db.add(configurator)
 
@@ -542,7 +519,7 @@ async def publish_product(
 
     result = await db.execute(
         select(Product).where(
-            Product.id == prod_uuid if prod_uuid else Product.id.like(f"{product_id}%"),
+            Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
             Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
@@ -560,9 +537,9 @@ async def publish_product(
                 detail="Product must have a completed 3D model before publishing",
             )
 
-        # Update status
+        # Update status (no published_at column in DB)
         product.status = ProductStatus.PUBLISHED
-        product.published_at = datetime.utcnow()
+        now = datetime.utcnow()
 
         # Create or enable publish link
         result = await db.execute(
@@ -618,7 +595,7 @@ async def publish_product(
 
     response_data = PublishProductResponse(
         published=payload.publish,
-        published_at=product.published_at,
+        published_at=now if payload.publish else None,
     )
 
     return api_success(response_data.model_dump())

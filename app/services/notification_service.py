@@ -6,6 +6,8 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import json
+
 from app.models.models import Notification, NotificationChannel, UserNotificationPreference
 
 
@@ -24,18 +26,20 @@ class NotificationService:
     ) -> Notification:
         """Create a notification for a user."""
         # Check if user has muted this notification type
-        prefs = await NotificationService.get_user_preferences(db, user_id, notification_type)
-
-        if prefs and prefs.muted:
+        # Respect user mutes (best-effort; prefs schema stores muted_types as TEXT)
+        if await NotificationService.is_muted(db, user_id, notification_type):
             # User has muted this notification type - skip
             return None
+
+        # Serialize data to TEXT for DB
+        serialized = json.dumps(data) if data is not None else None
 
         notification = Notification(
             user_id=user_id,
             type=notification_type,
             title=title,
             body=body,
-            data=data or {},
+            data=serialized,
             channel=channel,
         )
 
@@ -49,16 +53,33 @@ class NotificationService:
     async def get_user_preferences(
         db: AsyncSession,
         user_id: uuid.UUID,
-        notification_type: str,
     ) -> Optional[UserNotificationPreference]:
         """Get user notification preferences for a specific type."""
         result = await db.execute(
             select(UserNotificationPreference).where(
                 UserNotificationPreference.user_id == user_id,
-                UserNotificationPreference.notification_type == notification_type,
             )
         )
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def is_muted(
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        notification_type: str,
+    ) -> bool:
+        prefs = await NotificationService.get_user_preferences(db, user_id)
+        if not prefs or not prefs.muted_types:
+            return False
+        # Try JSON array first; fallback to comma-separated list
+        try:
+            muted = json.loads(prefs.muted_types)
+            if isinstance(muted, list):
+                return notification_type in muted
+        except Exception:
+            pass
+        # Fallback CSV parsing
+        return any(nt.strip() == notification_type for nt in prefs.muted_types.split(","))
 
     @staticmethod
     async def notify_job_completed(

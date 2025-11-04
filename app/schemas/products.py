@@ -57,7 +57,7 @@ class ProductResponse(ProductBase):
     processing_progress: Optional[int] = None
     failure_reason: Optional[str] = None
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
     configurator: Optional[ConfiguratorSettings] = None
 
     class Config:
