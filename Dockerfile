@@ -18,9 +18,14 @@ ENV PATH="/root/.local/bin:${PATH}"
 
 COPY pyproject.toml uv.lock ./
 
-RUN uv sync --frozen --system \
-	&& apt-get purge -y --auto-remove curl build-essential gcc \
-	&& rm -rf ~/.cache/uv /var/lib/apt/lists/*
+# Install locked dependencies into system Python using uv
+# 1) Export a pinned requirements file from uv.lock
+# 2) Install into the system site-packages
+RUN uv export --frozen > requirements.txt \
+    && uv pip install --system -r requirements.txt \
+    && rm -f requirements.txt \
+    && apt-get purge -y --auto-remove curl build-essential gcc \
+    && rm -rf ~/.cache/uv /var/lib/apt/lists/*
 
 COPY . .
 
