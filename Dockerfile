@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         build-essential \
         gcc \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --yes \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure uv is on PATH (installed to /root/.local/bin by default)
