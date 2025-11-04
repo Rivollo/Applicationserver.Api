@@ -17,3 +17,12 @@ __pycache__/
 # Tooling
 .vscode/
 .idea/
+
+# Env and local artifacts
+.env
+*.log
+.server.log
+*.sql
+dump-*.sql
+screen/
+storage/

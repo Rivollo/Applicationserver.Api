@@ -26,6 +26,8 @@ RUN python -c "import pxr; print('USD Python bindings available')" || echo "USD 
 RUN which usdzip || echo "usdzip command not found - will use manual fallback"
 
 ENV PORT=8080
-EXPOSE ${PORT}
+# Document the default container port
+EXPOSE 8080
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "${PORT:-8080}"]
+# Use shell form so $PORT expands at runtime
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
