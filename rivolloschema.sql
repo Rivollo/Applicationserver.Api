@@ -9,7 +9,7 @@ CREATE EXTENSION IF NOT EXISTS citext;   -- case-insensitive email
 -- ======================
 -- Core: Organizations & Users
 -- ======================
-CREATE TABLE IF NOT EXISTS organizations (
+CREATE TABLE IF NOT EXISTS tbl_organizations (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name         TEXT NOT NULL,
   slug         TEXT NOT NULL,
@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS organizations (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at   TIMESTAMPTZ
 );
-CREATE UNIQUE INDEX IF NOT EXISTS org_slug_uniq ON organizations (slug) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS org_slug_uniq ON tbl_organizations (slug) WHERE deleted_at IS NULL;
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS tbl_users (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email         CITEXT UNIQUE NOT NULL,
   password_hash TEXT,                         -- NULL for Google-only accounts
@@ -31,9 +31,9 @@ CREATE TABLE IF NOT EXISTS users (
   deleted_at    TIMESTAMPTZ
 );
 
-CREATE TABLE IF NOT EXISTS org_members (
-  org_id     UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  user_id    UUID NOT NULL REFERENCES users(id)         ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS tbl_org_members (
+  org_id     UUID NOT NULL REFERENCES tbl_organizations(id) ON DELETE CASCADE,
+  user_id    UUID NOT NULL REFERENCES tbl_users(id)         ON DELETE CASCADE,
   role       TEXT NOT NULL CHECK (role IN ('owner','admin','member')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (org_id, user_id)
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS org_members (
 -- ======================
 -- Plans, Subscriptions (user-scoped), Licenses
 -- ======================
-CREATE TABLE IF NOT EXISTS plans (
+CREATE TABLE IF NOT EXISTS tbl_mstr_plans (
   id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   code    TEXT UNIQUE NOT NULL,              -- 'free','pro','enterprise'
   name    TEXT NOT NULL,
@@ -51,10 +51,10 @@ CREATE TABLE IF NOT EXISTS plans (
 );
 
 -- Subscription belongs to a USER (not an organization)
-CREATE TABLE IF NOT EXISTS subscriptions (
+CREATE TABLE IF NOT EXISTS tbl_subscriptions (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id                UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  plan_id                UUID NOT NULL REFERENCES plans(id),
+  user_id                UUID NOT NULL REFERENCES tbl_users(id) ON DELETE CASCADE,
+  plan_id                UUID NOT NULL REFERENCES tbl_mstr_plans(id),
   status                 TEXT NOT NULL CHECK (status IN ('trialing','active','canceled','past_due')),
   seats_purchased        INT  NOT NULL DEFAULT 1,
   billing                JSONB NOT NULL DEFAULT '{}',  -- payment provider ref, invoices, etc.
@@ -63,27 +63,27 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   trial_end_at           TIMESTAMPTZ,
   renews_at              TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS subs_user_idx ON subscriptions (user_id);
+CREATE INDEX IF NOT EXISTS subs_user_idx ON tbl_subscriptions (user_id);
 
 -- Each seat granted to a user. Limits & usage are applied per-user here.
-CREATE TABLE IF NOT EXISTS license_assignments (
+CREATE TABLE IF NOT EXISTS tbl_license_assignments (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  subscription_id  UUID NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
-  user_id          UUID NOT NULL REFERENCES users(id)         ON DELETE CASCADE,
+  subscription_id  UUID NOT NULL REFERENCES tbl_subscriptions(id) ON DELETE CASCADE,
+  user_id          UUID NOT NULL REFERENCES tbl_users(id)         ON DELETE CASCADE,
   status           TEXT NOT NULL CHECK (status IN ('invited','active','revoked')) DEFAULT 'active',
   limits           JSONB NOT NULL DEFAULT '{}',               -- effective caps for this user
   usage_counters   JSONB NOT NULL DEFAULT '{}',               -- counters (reset each period in app logic)
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (subscription_id, user_id)
 );
-CREATE INDEX IF NOT EXISTS license_user_idx ON license_assignments (user_id);
+CREATE INDEX IF NOT EXISTS license_user_idx ON tbl_license_assignments (user_id);
 
 -- ============
 -- Assets & Catalog
 -- ============
-CREATE TABLE IF NOT EXISTS assets (
+CREATE TABLE IF NOT EXISTS tbl_assets (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id        UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id        UUID NOT NULL REFERENCES tbl_organizations(id) ON DELETE CASCADE,
   type          TEXT NOT NULL CHECK (type IN ('image','model','mask','thumbnail')),
   storage       TEXT NOT NULL DEFAULT 'azure_blob',          -- or 's3','gcs','local'
   url           TEXT NOT NULL,
@@ -92,40 +92,40 @@ CREATE TABLE IF NOT EXISTS assets (
   width         INT,
   height        INT,
   checksum_sha256 TEXT,
-  created_by    UUID REFERENCES users(id),
+  created_by    UUID REFERENCES tbl_users(id),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS assets_org_type_idx ON assets (org_id, type);
+CREATE INDEX IF NOT EXISTS assets_org_type_idx ON tbl_assets (org_id, type);
 
-CREATE TABLE IF NOT EXISTS products (
+CREATE TABLE IF NOT EXISTS tbl_products (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id         UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id         UUID NOT NULL REFERENCES tbl_organizations(id) ON DELETE CASCADE,
   name           TEXT NOT NULL,
   slug           TEXT NOT NULL,
   status         TEXT NOT NULL DEFAULT 'draft'
                  CHECK (status IN ('draft','processing','ready','published','unpublished','archived')),
-  cover_asset_id UUID REFERENCES assets(id),
-  model_asset_id UUID REFERENCES assets(id),
+  cover_asset_id UUID REFERENCES tbl_assets(id),
+  model_asset_id UUID REFERENCES tbl_assets(id),
   tags           TEXT[] DEFAULT '{}',
   metadata       JSONB NOT NULL DEFAULT '{}',
   published_at   TIMESTAMPTZ,
-  created_by     UUID REFERENCES users(id),
+  created_by     UUID REFERENCES tbl_users(id),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at     TIMESTAMPTZ,
   UNIQUE (org_id, slug)
 );
 
-CREATE TABLE IF NOT EXISTS configurators (
+CREATE TABLE IF NOT EXISTS tbl_configurators (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  product_id   UUID UNIQUE NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  product_id   UUID UNIQUE NOT NULL REFERENCES tbl_products(id) ON DELETE CASCADE,
   settings     JSONB NOT NULL DEFAULT '{}'    -- viewer and UI settings, variants, materials
 );
 
 -- Hotspots with coordinates + styling
-CREATE TABLE IF NOT EXISTS hotspots (
+CREATE TABLE IF NOT EXISTS tbl_hotspots (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  product_id     UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  product_id     UUID NOT NULL REFERENCES tbl_products(id) ON DELETE CASCADE,
   label          TEXT NOT NULL,
   description    TEXT NOT NULL,
   pos_x          DOUBLE PRECISION NOT NULL,
@@ -142,14 +142,14 @@ CREATE TABLE IF NOT EXISTS hotspots (
   CHECK (pos_y BETWEEN -1.0 AND 1.0),
   CHECK (pos_z BETWEEN -1.0 AND 1.0)
 );
-CREATE INDEX IF NOT EXISTS hotspots_product_order_idx ON hotspots (product_id, order_index);
+CREATE INDEX IF NOT EXISTS hotspots_product_order_idx ON tbl_hotspots (product_id, order_index);
 
-CREATE TABLE IF NOT EXISTS jobs (
+CREATE TABLE IF NOT EXISTS tbl_jobs (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id          UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  product_id      UUID NOT NULL REFERENCES products(id)       ON DELETE CASCADE,
-  image_asset_id  UUID NOT NULL REFERENCES assets(id),
-  model_asset_id  UUID REFERENCES assets(id),
+  org_id          UUID NOT NULL REFERENCES tbl_organizations(id) ON DELETE CASCADE,
+  product_id      UUID NOT NULL REFERENCES tbl_products(id)       ON DELETE CASCADE,
+  image_asset_id  UUID NOT NULL REFERENCES tbl_assets(id),
+  model_asset_id  UUID REFERENCES tbl_assets(id),
   status          TEXT NOT NULL DEFAULT 'pending'
                   CHECK (status IN ('pending','processing','completed','failed')),
   engine          TEXT,
@@ -160,12 +160,12 @@ CREATE TABLE IF NOT EXISTS jobs (
   error           JSONB,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS jobs_product_status_idx ON jobs (product_id, status);
-CREATE INDEX IF NOT EXISTS jobs_org_idx ON jobs (org_id);
+CREATE INDEX IF NOT EXISTS jobs_product_status_idx ON tbl_jobs (product_id, status);
+CREATE INDEX IF NOT EXISTS jobs_org_idx ON tbl_jobs (org_id);
 
-CREATE TABLE IF NOT EXISTS publish_links (
+CREATE TABLE IF NOT EXISTS tbl_publish_links (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  product_id     UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  product_id     UUID NOT NULL REFERENCES tbl_products(id) ON DELETE CASCADE,
   public_id      TEXT UNIQUE NOT NULL,
   is_enabled     BOOLEAN NOT NULL DEFAULT TRUE,
   expires_at     TIMESTAMPTZ,
@@ -175,43 +175,43 @@ CREATE TABLE IF NOT EXISTS publish_links (
   last_viewed_at TIMESTAMPTZ,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS publish_product_enabled_idx ON publish_links (product_id) WHERE is_enabled;
+CREATE INDEX IF NOT EXISTS publish_product_enabled_idx ON tbl_publish_links (product_id) WHERE is_enabled;
 
 -- =========
 -- Galleries
 -- =========
-CREATE TABLE IF NOT EXISTS galleries (
+CREATE TABLE IF NOT EXISTS tbl_galleries (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id      UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  org_id      UUID NOT NULL REFERENCES tbl_organizations(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,
   slug        TEXT NOT NULL,
   is_public   BOOLEAN NOT NULL DEFAULT FALSE,
   settings    JSONB NOT NULL DEFAULT '{}',
-  created_by  UUID REFERENCES users(id),
+  created_by  UUID REFERENCES tbl_users(id),
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at  TIMESTAMPTZ,
   UNIQUE (org_id, slug)
 );
 
-CREATE TABLE IF NOT EXISTS gallery_items (
+CREATE TABLE IF NOT EXISTS tbl_gallery_items (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  gallery_id   UUID NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
-  product_id   UUID NOT NULL REFERENCES products(id)  ON DELETE CASCADE,
+  gallery_id   UUID NOT NULL REFERENCES tbl_galleries(id) ON DELETE CASCADE,
+  product_id   UUID NOT NULL REFERENCES tbl_products(id)  ON DELETE CASCADE,
   order_index  INT NOT NULL DEFAULT 0,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (gallery_id, product_id)
 );
-CREATE INDEX IF NOT EXISTS gallery_items_order_idx ON gallery_items (gallery_id, order_index);
+CREATE INDEX IF NOT EXISTS gallery_items_order_idx ON tbl_gallery_items (gallery_id, order_index);
 
 -- ==========
 -- Analytics
 -- ==========
-CREATE TABLE IF NOT EXISTS analytics_events (
+CREATE TABLE IF NOT EXISTS tbl_analytics_events (
   id               BIGSERIAL PRIMARY KEY,
-  org_id           UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  product_id       UUID REFERENCES products(id) ON DELETE SET NULL,
-  publish_link_id  UUID REFERENCES publish_links(id) ON DELETE SET NULL,
+  org_id           UUID NOT NULL REFERENCES tbl_organizations(id) ON DELETE CASCADE,
+  product_id       UUID REFERENCES tbl_products(id) ON DELETE SET NULL,
+  publish_link_id  UUID REFERENCES tbl_publish_links(id) ON DELETE SET NULL,
   session_id       TEXT,
   event_type       TEXT NOT NULL,
   user_agent       TEXT,
@@ -219,27 +219,27 @@ CREATE TABLE IF NOT EXISTS analytics_events (
   occurred_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   payload          JSONB NOT NULL DEFAULT '{}'
 );
-CREATE INDEX IF NOT EXISTS ae_org_time_idx ON analytics_events (org_id, occurred_at);
-CREATE INDEX IF NOT EXISTS ae_product_time_idx ON analytics_events (product_id, occurred_at);
-CREATE INDEX IF NOT EXISTS ae_payload_gin ON analytics_events USING GIN (payload);
+CREATE INDEX IF NOT EXISTS ae_org_time_idx ON tbl_analytics_events (org_id, occurred_at);
+CREATE INDEX IF NOT EXISTS ae_product_time_idx ON tbl_analytics_events (product_id, occurred_at);
+CREATE INDEX IF NOT EXISTS ae_payload_gin ON tbl_analytics_events USING GIN (payload);
 
-CREATE TABLE IF NOT EXISTS analytics_daily_product (
+CREATE TABLE IF NOT EXISTS tbl_analytics_daily_product (
   day           DATE NOT NULL,
-  org_id        UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  product_id    UUID NOT NULL REFERENCES products(id)      ON DELETE CASCADE,
+  org_id        UUID NOT NULL REFERENCES tbl_organizations(id) ON DELETE CASCADE,
+  product_id    UUID NOT NULL REFERENCES tbl_products(id)      ON DELETE CASCADE,
   views         BIGINT NOT NULL DEFAULT 0,
   engaged       BIGINT NOT NULL DEFAULT 0,
   adds_from_3d  BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (day, org_id, product_id)
 );
-CREATE INDEX IF NOT EXISTS adp_org_day_idx ON analytics_daily_product (org_id, day);
+CREATE INDEX IF NOT EXISTS adp_org_day_idx ON tbl_analytics_daily_product (org_id, day);
 
 -- ==========================
 -- Auth (Google + Email flows)
 -- ==========================
-CREATE TABLE IF NOT EXISTS auth_identities (
+CREATE TABLE IF NOT EXISTS tbl_auth_identities (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id           UUID NOT NULL REFERENCES tbl_users(id) ON DELETE CASCADE,
   provider          TEXT NOT NULL CHECK (provider IN ('google','email')),
   provider_user_id  TEXT NOT NULL,
   email             CITEXT NOT NULL,
@@ -248,13 +248,13 @@ CREATE TABLE IF NOT EXISTS auth_identities (
   UNIQUE (provider, provider_user_id)
 );
 
-CREATE TABLE IF NOT EXISTS email_verifications (
+CREATE TABLE IF NOT EXISTS tbl_email_verifications (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES tbl_users(id) ON DELETE CASCADE,
   token       TEXT UNIQUE NOT NULL,
   expires_at  TIMESTAMPTZ NOT NULL,
   used_at     TIMESTAMPTZ
 );
 
-CREATE TABLE IF NOT EXISTS password_resets (
+CREATE TABLE IF NOT EXISTS tbl_password_resets (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

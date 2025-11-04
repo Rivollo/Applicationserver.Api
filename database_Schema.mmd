@@ -1,38 +1,38 @@
 erDiagram
-  USERS ||--o{ ORG_MEMBERS : joins
-  ORGANIZATIONS ||--o{ ORG_MEMBERS : has
+  tbl_users ||--o{ tbl_org_members : joins
+  tbl_organizations ||--o{ tbl_org_members : has
 
-  USERS ||--o{ SUBSCRIPTIONS : owns
-  PLANS ||--o{ SUBSCRIPTIONS : governs
-  SUBSCRIPTIONS ||--o{ LICENSE_ASSIGNMENTS : grants
-  USERS ||--o{ LICENSE_ASSIGNMENTS : receives
+  tbl_users ||--o{ tbl_subscriptions : owns
+  tbl_mstr_plans ||--o{ tbl_subscriptions : governs
+  tbl_subscriptions ||--o{ tbl_license_assignments : grants
+  tbl_users ||--o{ tbl_license_assignments : receives
 
-  ORGANIZATIONS ||--o{ PRODUCTS : owns
-  USERS ||--o{ PRODUCTS : created_by
-  PRODUCTS ||--o| CONFIGURATORS : has
-  PRODUCTS ||--o{ HOTSPOTS : has
-  PRODUCTS ||--o{ JOBS : has
-  PRODUCTS ||--o{ PUBLISH_LINKS : publishes
-  ORGANIZATIONS ||--o{ ASSETS : stores
-  PRODUCTS ||--o{ GALLERY_ITEMS : listed_in
-  GALLERIES ||--o{ GALLERY_ITEMS : contains
+  tbl_organizations ||--o{ tbl_products : owns
+  tbl_users ||--o{ tbl_products : created_by
+  tbl_products ||--o| tbl_configurators : has
+  tbl_products ||--o{ tbl_hotspots : has
+  tbl_products ||--o{ tbl_jobs : has
+  tbl_products ||--o{ tbl_publish_links : publishes
+  tbl_organizations ||--o{ tbl_assets : stores
+  tbl_products ||--o{ tbl_gallery_items : listed_in
+  tbl_galleries ||--o{ tbl_gallery_items : contains
 
-  ORGANIZATIONS ||--o{ ANALYTICS_EVENTS : records
-  PRODUCTS ||--o{ ANALYTICS_EVENTS : records
-  PUBLISH_LINKS ||--o{ ANALYTICS_EVENTS : via
-  ORGANIZATIONS ||--o{ ANALYTICS_DAILY_PRODUCT : aggregates
-  PRODUCTS ||--o{ ANALYTICS_DAILY_PRODUCT : aggregates
+  tbl_organizations ||--o{ tbl_analytics_events : records
+  tbl_products ||--o{ tbl_analytics_events : records
+  tbl_publish_links ||--o{ tbl_analytics_events : via
+  tbl_organizations ||--o{ tbl_analytics_daily_product : aggregates
+  tbl_products ||--o{ tbl_analytics_daily_product : aggregates
 
-  USERS ||--o{ AUTH_IDENTITIES : has
-  USERS ||--o{ EMAIL_VERIFICATIONS : verifies
-  USERS ||--o{ PASSWORD_RESETS : resets
+  tbl_users ||--o{ tbl_auth_identities : has
+  tbl_users ||--o{ tbl_email_verifications : verifies
+  tbl_users ||--o{ tbl_password_resets : resets
 
-  USERS ||--o{ ACTIVITY_LOGS : acts
-  ORGANIZATIONS ||--o{ ACTIVITY_LOGS : in
-  USERS ||--o{ NOTIFICATIONS : receives
-  USERS ||--o| USER_NOTIFICATION_PREFS : config
+  tbl_users ||--o{ tbl_activity_logs : acts
+  tbl_organizations ||--o{ tbl_activity_logs : in
+  tbl_users ||--o{ tbl_notifications : receives
+  tbl_users ||--o| tbl_user_notification_prefs : config
 
-  USERS {
+  tbl_users {
     uuid id PK
     string email
     string password_hash
@@ -41,27 +41,27 @@ erDiagram
     datetime created_at
   }
 
-  ORGANIZATIONS {
+  tbl_organizations {
     uuid id PK
     string name
     string slug
     string branding
   }
 
-  ORG_MEMBERS {
+  tbl_org_members {
     uuid org_id FK
     uuid user_id FK
     string role
   }
 
-  PLANS {
+  tbl_mstr_plans {
     uuid id PK
     string code
     string name
     string quotas
   }
 
-  SUBSCRIPTIONS {
+  tbl_subscriptions {
     uuid id PK
     uuid user_id FK
     uuid plan_id FK
@@ -72,7 +72,7 @@ erDiagram
     datetime current_period_end
   }
 
-  LICENSE_ASSIGNMENTS {
+  tbl_license_assignments {
     uuid id PK
     uuid subscription_id FK
     uuid user_id FK
@@ -82,7 +82,7 @@ erDiagram
     datetime created_at
   }
 
-  ASSETS {
+  tbl_assets {
     uuid id PK
     uuid org_id FK
     string type
@@ -91,7 +91,7 @@ erDiagram
     int size_bytes
   }
 
-  PRODUCTS {
+  tbl_products {
     uuid id PK
     uuid org_id FK
     string name
@@ -101,13 +101,13 @@ erDiagram
     uuid created_by FK
   }
 
-  CONFIGURATORS {
+  tbl_configurators {
     uuid id PK
     uuid product_id FK
     string settings
   }
 
-  HOTSPOTS {
+  tbl_hotspots {
     uuid id PK
     uuid product_id FK
     string label
@@ -124,7 +124,7 @@ erDiagram
     datetime created_at
   }
 
-  JOBS {
+  tbl_jobs {
     uuid id PK
     uuid product_id FK
     uuid image_asset_id FK
@@ -134,7 +134,7 @@ erDiagram
     datetime completed_at
   }
 
-  PUBLISH_LINKS {
+  tbl_publish_links {
     uuid id PK
     uuid product_id FK
     string public_id
@@ -143,7 +143,7 @@ erDiagram
     string password_hash
   }
 
-  GALLERIES {
+  tbl_galleries {
     uuid id PK
     uuid org_id FK
     string name
@@ -151,14 +151,14 @@ erDiagram
     boolean is_public
   }
 
-  GALLERY_ITEMS {
+  tbl_gallery_items {
     uuid id PK
     uuid gallery_id FK
     uuid product_id FK
     int order_index
   }
 
-  ANALYTICS_EVENTS {
+  tbl_analytics_events {
     int id PK
     uuid org_id FK
     uuid product_id FK
@@ -168,7 +168,7 @@ erDiagram
     string payload
   }
 
-  ANALYTICS_DAILY_PRODUCT {
+  tbl_analytics_daily_product {
     date day PK
     uuid org_id FK
     uuid product_id FK
@@ -177,7 +177,7 @@ erDiagram
     int adds_from_3d
   }
 
-  AUTH_IDENTITIES {
+  tbl_auth_identities {
     uuid id PK
     uuid user_id FK
     string provider
@@ -187,7 +187,7 @@ erDiagram
     string meta
   }
 
-  EMAIL_VERIFICATIONS {
+  tbl_email_verifications {
     uuid id PK
     uuid user_id FK
     string token
@@ -195,7 +195,7 @@ erDiagram
     datetime used_at
   }
 
-  PASSWORD_RESETS {
+  tbl_password_resets {
     uuid id PK
     uuid user_id FK
     string token
@@ -203,7 +203,7 @@ erDiagram
     datetime used_at
   }
 
-  ACTIVITY_LOGS {
+  tbl_activity_logs {
     uuid id PK
     uuid actor_user_id FK
     uuid org_id FK
@@ -216,7 +216,7 @@ erDiagram
     string metadata
   }
 
-  NOTIFICATIONS {
+  tbl_notifications {
     uuid id PK
     uuid user_id FK
     string type
@@ -227,7 +227,7 @@ erDiagram
     datetime created_at
   }
 
-  USER_NOTIFICATION_PREFS {
+  tbl_user_notification_prefs {
     uuid user_id PK
     string channels
     string muted_types

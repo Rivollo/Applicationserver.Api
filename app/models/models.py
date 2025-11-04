@@ -110,7 +110,7 @@ class AuthProvider(str, enum.Enum):
 
 
 class Organization(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
-    __tablename__ = "organizations"
+    __tablename__ = "tbl_organizations"
 
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False)
@@ -134,7 +134,7 @@ class Organization(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 
 class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
-    __tablename__ = "users"
+    __tablename__ = "tbl_users"
 
     email: Mapped[str] = mapped_column(CITEXT, unique=True, nullable=False)
     password_hash: Mapped[Optional[str]] = mapped_column(Text)
@@ -147,14 +147,14 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 
 class OrgMember(CreatedAtMixin, Base):
-    __tablename__ = "org_members"
+    __tablename__ = "tbl_org_members"
     __table_args__ = (UniqueConstraint("org_id", "user_id", name="uq_org_user"),)
 
     org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), primary_key=True
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), primary_key=True
     )
     role: Mapped[OrgRole] = mapped_column(Enum(OrgRole, name="org_role"), nullable=False)
 
@@ -163,7 +163,7 @@ class OrgMember(CreatedAtMixin, Base):
 
 
 class Plan(UUIDMixin, Base):
-    __tablename__ = "plans"
+    __tablename__ = "tbl_mstr_plans"
 
     code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
@@ -173,14 +173,14 @@ class Plan(UUIDMixin, Base):
 
 
 class Subscription(UUIDMixin, Base):
-    __tablename__ = "subscriptions"
+    __tablename__ = "tbl_subscriptions"
     __table_args__ = (Index("ix_subscriptions_user", "user_id"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     plan_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("plans.id"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_mstr_plans.id"), nullable=False
     )
     status: Mapped[SubscriptionStatus] = mapped_column(
         Enum(SubscriptionStatus, name="subscription_status"), nullable=False
@@ -200,17 +200,17 @@ class Subscription(UUIDMixin, Base):
 
 
 class LicenseAssignment(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "license_assignments"
+    __tablename__ = "tbl_license_assignments"
     __table_args__ = (
         UniqueConstraint("subscription_id", "user_id", name="uq_license_subscription_user"),
         Index("ix_license_user", "user_id"),
     )
 
     subscription_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_subscriptions.id", ondelete="CASCADE"), nullable=False
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     status: Mapped[LicenseStatus] = mapped_column(
         Enum(LicenseStatus, name="license_status"), nullable=False, server_default=text("'active'"),
@@ -223,11 +223,11 @@ class LicenseAssignment(UUIDMixin, CreatedAtMixin, Base):
 
 
 class Asset(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "assets"
+    __tablename__ = "tbl_assets"
     __table_args__ = (Index("ix_assets_org_type", "org_id", "type"),)
 
     org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[AssetType] = mapped_column(Enum(AssetType, name="asset_type"), nullable=False)
     storage: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'azure_blob'"))
@@ -238,20 +238,20 @@ class Asset(UUIDMixin, CreatedAtMixin, Base):
     height: Mapped[Optional[int]] = mapped_column(Integer)
     checksum_sha256: Mapped[Optional[str]] = mapped_column(String)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
     )
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="assets")
 
 
 class Product(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
-    __tablename__ = "products"
+    __tablename__ = "tbl_products"
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_product_org_slug"),
     )
 
     org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False)
@@ -259,10 +259,10 @@ class Product(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         Enum(ProductStatus, name="product_status"), nullable=False, server_default=text("'draft'"),
     )
     cover_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_assets.id", ondelete="SET NULL")
     )
     model_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_assets.id", ondelete="SET NULL")
     )
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(String), server_default=text("'{}'::text[]"), nullable=False
@@ -272,7 +272,7 @@ class Product(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     published_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
     )
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="products")
@@ -289,10 +289,10 @@ class Product(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 
 class Configurator(UUIDMixin, Base):
-    __tablename__ = "configurators"
+    __tablename__ = "tbl_configurators"
 
     product_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), unique=True, nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), unique=True, nullable=False
     )
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
 
@@ -300,7 +300,7 @@ class Configurator(UUIDMixin, Base):
 
 
 class Hotspot(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "hotspots"
+    __tablename__ = "tbl_hotspots"
     __table_args__ = (
         Index("ix_hotspots_product_order", "product_id", "order_index"),
         CheckConstraint("pos_x BETWEEN -1.0 AND 1.0", name="ck_hotspot_pos_x"),
@@ -309,7 +309,7 @@ class Hotspot(UUIDMixin, CreatedAtMixin, Base):
     )
 
     product_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
     )
     label: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -331,22 +331,22 @@ class Hotspot(UUIDMixin, CreatedAtMixin, Base):
 
 
 class Job(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "jobs"
+    __tablename__ = "tbl_jobs"
     __table_args__ = (
         Index("ix_jobs_product_status", "product_id", "status"),
         Index("ix_jobs_org", "org_id"),
     )
 
     org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
     )
     image_asset_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("assets.id"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_assets.id"), nullable=False
     )
-    model_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("assets.id"))
+    model_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tbl_assets.id"))
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, name="job_status"), nullable=False, server_default=text("'pending'"),
     )
@@ -362,7 +362,7 @@ class Job(UUIDMixin, CreatedAtMixin, Base):
 
 
 class PublishLink(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "publish_links"
+    __tablename__ = "tbl_publish_links"
     __table_args__ = (
         Index(
             "ix_publish_links_product_enabled",
@@ -372,7 +372,7 @@ class PublishLink(UUIDMixin, CreatedAtMixin, Base):
     )
 
     product_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
     )
     public_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
@@ -386,18 +386,18 @@ class PublishLink(UUIDMixin, CreatedAtMixin, Base):
 
 
 class Gallery(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
-    __tablename__ = "galleries"
+    __tablename__ = "tbl_galleries"
     __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_gallery_org_slug"),)
 
     org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), nullable=False)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
     )
 
     items: Mapped[list["GalleryItem"]] = relationship(
@@ -406,17 +406,17 @@ class Gallery(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 
 class GalleryItem(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "gallery_items"
+    __tablename__ = "tbl_gallery_items"
     __table_args__ = (
         UniqueConstraint("gallery_id", "product_id", name="uq_gallery_product"),
         Index("ix_gallery_items_order", "gallery_id", "order_index"),
     )
 
     gallery_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("galleries.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_galleries.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
     )
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
@@ -425,17 +425,17 @@ class GalleryItem(UUIDMixin, CreatedAtMixin, Base):
 
 
 class AnalyticsEvent(Base):
-    __tablename__ = "analytics_events"
+    __tablename__ = "tbl_analytics_events"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="SET NULL")
     )
     publish_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("publish_links.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_publish_links.id", ondelete="SET NULL")
     )
     session_id: Mapped[Optional[str]] = mapped_column(String)
     event_type: Mapped[str] = mapped_column(String, nullable=False)
@@ -457,17 +457,17 @@ Index(
 
 
 class AnalyticsDailyProduct(Base):
-    __tablename__ = "analytics_daily_product"
+    __tablename__ = "tbl_analytics_daily_product"
     __table_args__ = (
         PrimaryKeyConstraint("day", "org_id", "product_id", name="pk_analytics_daily_product"),
     )
 
     day: Mapped[date] = mapped_column(Date, nullable=False)
     org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
     )
     views: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     engaged: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
@@ -475,11 +475,11 @@ class AnalyticsDailyProduct(Base):
 
 
 class AuthIdentity(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "auth_identities"
+    __tablename__ = "tbl_auth_identities"
     __table_args__ = (UniqueConstraint("provider", "provider_user_id", name="uq_auth_identity_provider"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     provider: Mapped[AuthProvider] = mapped_column(Enum(AuthProvider, name="auth_provider"), nullable=False)
     provider_user_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -491,10 +491,10 @@ class AuthIdentity(UUIDMixin, CreatedAtMixin, Base):
 
 
 class EmailVerification(UUIDMixin, Base):
-    __tablename__ = "email_verifications"
+    __tablename__ = "tbl_email_verifications"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     token: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
@@ -502,10 +502,10 @@ class EmailVerification(UUIDMixin, Base):
 
 
 class PasswordReset(UUIDMixin, Base):
-    __tablename__ = "password_resets"
+    __tablename__ = "tbl_password_resets"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     token: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
@@ -513,14 +513,14 @@ class PasswordReset(UUIDMixin, Base):
 
 
 class ActivityLog(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "activity_logs"
+    __tablename__ = "tbl_activity_logs"
     __table_args__ = (Index("ix_activity_logs_org_created_at", "org_id", "created_at"),)
 
     org_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="SET NULL")
     )
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="SET NULL")
     )
     action: Mapped[str] = mapped_column(String, nullable=False)
     target_type: Mapped[Optional[str]] = mapped_column(String)
@@ -533,7 +533,7 @@ class ActivityLog(UUIDMixin, CreatedAtMixin, Base):
 
 
 class Notification(UUIDMixin, CreatedAtMixin, Base):
-    __tablename__ = "notifications"
+    __tablename__ = "tbl_notifications"
     __table_args__ = (
         Index(
             "ix_notifications_user_unread",
@@ -543,7 +543,7 @@ class Notification(UUIDMixin, CreatedAtMixin, Base):
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
@@ -558,11 +558,11 @@ class Notification(UUIDMixin, CreatedAtMixin, Base):
 
 
 class UserNotificationPreference(UUIDMixin, Base):
-    __tablename__ = "user_notification_prefs"
+    __tablename__ = "tbl_user_notification_prefs"
     __table_args__ = (UniqueConstraint("user_id", "notification_type", name="uq_user_notification_pref"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
     )
     notification_type: Mapped[str] = mapped_column(String, nullable=False)
     channels: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"), nullable=False)
@@ -586,7 +586,7 @@ class AssetPart(UUIDMixin, CreatedAtMixin, Base):
     __tablename__ = "asset_parts"
 
     asset_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("tbl_assets.id", ondelete="CASCADE"), nullable=False
     )
     part_name: Mapped[str] = mapped_column(String, nullable=False)
     storage: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'azure_blob'"))
