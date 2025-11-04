@@ -13,7 +13,7 @@ class GalleryBase(BaseModel):
     description: Optional[str] = Field(None, max_length=2000)
     thumbnail_color: Optional[str] = Field(None, pattern="^#[0-9A-Fa-f]{6}$", alias="thumbnailColor")
     thumbnail_overlay: Optional[str] = Field(None, pattern="^#[0-9A-Fa-f]{6}$", alias="thumbnailOverlay")
-    tags: list[str] = Field(default_factory=list, max_items=20)
+    tags: Optional[list[str]] = Field(None, max_items=20)
 
     class Config:
         populate_by_name = True

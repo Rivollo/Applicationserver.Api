@@ -8,17 +8,14 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DB
-from app.models.models import Organization, OrgMember
-from app.services.organization_service import OrganizationService
+from app.models.models import Organization
 from app.schemas.branding import BrandingResponse, BrandingUpdate
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["branding"])
 
 
-async def _get_user_org_id(db: DB, user_id: uuid.UUID) -> Optional[uuid.UUID]:
-    """Get or create the user's primary organization ID."""
-    return await OrganizationService.get_or_create_org_id(db, user_id)
+ # Org-free branding
 
 
 @router.get("/branding", response_model=dict)
@@ -27,18 +24,14 @@ async def get_branding(
     db: DB,
 ):
     """Get organization branding settings."""
-    org_id = await _get_user_org_id(db, current_user.id)
-
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-
-    result = await db.execute(
-        select(Organization).where(
-            Organization.id == org_id,
-            Organization.deleted_at.is_(None),
-        )
-    )
+    # Use first org as global, create default if missing
+    result = await db.execute(select(Organization).limit(1))
     org = result.scalar_one_or_none()
+    if not org:
+        org = Organization(name="Default", slug="default")
+        db.add(org)
+        await db.commit()
+        await db.refresh(org)
 
     if not org:
         raise HTTPException(
@@ -69,24 +62,13 @@ async def update_branding(
     db: DB,
 ):
     """Update organization branding (Pro/Enterprise only)."""
-    org_id = await _get_user_org_id(db, current_user.id)
-
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-
-    result = await db.execute(
-        select(Organization).where(
-            Organization.id == org_id,
-            Organization.deleted_at.is_(None),
-        )
-    )
+    result = await db.execute(select(Organization).limit(1))
     org = result.scalar_one_or_none()
-
     if not org:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organization not found",
-        )
+        org = Organization(name="Default", slug="default")
+        db.add(org)
+        await db.commit()
+        await db.refresh(org)
 
     # Update branding
     try:

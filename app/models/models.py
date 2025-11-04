@@ -149,16 +149,6 @@ class Organization(UUIDMixin, TimestampMixin, Base):
 
     members: Mapped[list["OrgMember"]] = relationship("OrgMember", back_populates="organization")
     assets: Mapped[list["Asset"]] = relationship("Asset", back_populates="organization")
-    products: Mapped[list["Product"]] = relationship("Product", back_populates="organization")
-    jobs: Mapped[list["Job"]] = relationship(
-        "Job",
-        secondary=lambda: Product.__table__,
-        primaryjoin=lambda: Organization.id == Product.__table__.c.org_id,
-        secondaryjoin=lambda: Job.product_id == Product.__table__.c.id,
-        viewonly=True,
-        overlaps="products,jobs",
-        foreign_keys=lambda: (Product.__table__.c.org_id, Job.product_id),
-    )
 
 
 class User(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
@@ -315,13 +305,10 @@ class Asset(UUIDMixin, AuditMixin, Base):
 
 class Product(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "tbl_products"
-    __table_args__ = (
-        UniqueConstraint("org_id", "slug", name="uq_product_org_slug"),
-    )
+    __table_args__ = ()
 
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_organizations.id", ondelete="CASCADE"), nullable=False
-    )
+    # No org_id column in current DB snapshot; expose virtual NULL
+    org_id = column_property(literal_column("NULL::uuid"))
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[ProductStatus] = mapped_column(
@@ -342,7 +329,7 @@ class Product(UUIDMixin, TimestampMixin, Base):
     # Virtual column - products table doesn't have deleted_at in database
     deleted_at = column_property(literal_column("NULL::timestamptz"))
 
-    organization: Mapped[Organization] = relationship("Organization", back_populates="products")
+    # No organization relationship without org_id FK
     configurator: Mapped[Optional["Configurator"]] = relationship(
         "Configurator", back_populates="product", uselist=False
     )

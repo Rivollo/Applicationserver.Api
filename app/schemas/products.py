@@ -15,9 +15,9 @@ class ProductBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=2000)
     brand: Optional[str] = Field(None, max_length=100)
-    accent_color: str = Field(default="#2563EB", pattern="^#[0-9A-Fa-f]{6}$")
+    accent_color: Optional[str] = Field(None, pattern="^#[0-9A-Fa-f]{6}$")
     accent_overlay: Optional[str] = Field(None, pattern="^#[0-9A-Fa-f]{6}$")
-    tags: list[str] = Field(default_factory=list, max_items=20)
+    tags: Optional[list[str]] = Field(None, max_items=20)
 
 
 class ProductCreate(ProductBase):

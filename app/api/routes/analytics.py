@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DB
-from app.models.models import AnalyticsDailyProduct, AnalyticsEvent, OrgMember, Product
+from app.models.models import AnalyticsDailyProduct, AnalyticsEvent, Product
 from app.schemas.analytics import (
     AnalyticsOverviewResponse,
     AnalyticsSummary,
@@ -20,12 +20,7 @@ from app.utils.envelopes import api_success
 router = APIRouter(tags=["analytics"])
 
 
-async def _get_user_org_id(db: DB, user_id: uuid.UUID) -> Optional[uuid.UUID]:
-    """Get the user's primary organization ID."""
-    result = await db.execute(
-        select(OrgMember.org_id).where(OrgMember.user_id == user_id).limit(1)
-    )
-    return result.scalar_one_or_none()
+# Org-free analytics; no org scoping
 
 
 @router.get("/analytics/overview", response_model=dict)
@@ -37,17 +32,7 @@ async def get_analytics_overview(
     product_id: Optional[str] = Query(None, alias="productId"),
 ):
     """Get analytics overview with summary, time series, and top products."""
-    org_id = await _get_user_org_id(db, current_user.id)
-
-    if not org_id:
-        # Return empty analytics
-        return api_success(
-            AnalyticsOverviewResponse(
-                summary=AnalyticsSummary(views=0, engagedViews=0, addsFrom3D=0),
-                timeSeries=[],
-                topProducts=[],
-            ).model_dump()
-        )
+    # No org checks
 
     # Default to last 30 days if not specified
     if not end_date:
@@ -61,7 +46,6 @@ async def get_analytics_overview(
         func.sum(AnalyticsDailyProduct.engaged).label("total_engaged"),
         func.sum(AnalyticsDailyProduct.adds_from_3d).label("total_adds"),
     ).where(
-        AnalyticsDailyProduct.org_id == org_id,
         AnalyticsDailyProduct.day >= start_date,
         AnalyticsDailyProduct.day <= end_date,
     )
@@ -70,9 +54,7 @@ async def get_analytics_overview(
     if product_id:
         # Parse product ID
         try:
-            if product_id.startswith("prod-"):
-                product_id = product_id[5:]
-            prod_uuid = uuid.UUID(product_id) if len(product_id) > 8 else None
+            prod_uuid = uuid.UUID(product_id)
         except ValueError:
             prod_uuid = None
 
@@ -92,7 +74,6 @@ async def get_analytics_overview(
         AnalyticsDailyProduct.day,
         func.sum(AnalyticsDailyProduct.views).label("daily_views"),
     ).where(
-        AnalyticsDailyProduct.org_id == org_id,
         AnalyticsDailyProduct.day >= start_date,
         AnalyticsDailyProduct.day <= end_date,
     )
@@ -119,7 +100,6 @@ async def get_analytics_overview(
         )
         .join(AnalyticsDailyProduct, Product.id == AnalyticsDailyProduct.product_id)
         .where(
-            AnalyticsDailyProduct.org_id == org_id,
             AnalyticsDailyProduct.day >= start_date,
             AnalyticsDailyProduct.day <= end_date,
             Product.deleted_at.is_(None),
@@ -134,7 +114,7 @@ async def get_analytics_overview(
 
     top_products = [
         {
-            "id": f"prod-{str(row.id)[:8]}",
+            "id": str(row.id),
             "name": row.name,
             "views": int(row.product_views),
         }

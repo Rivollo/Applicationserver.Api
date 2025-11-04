@@ -87,8 +87,8 @@ class ActivityService:
         db: AsyncSession,
         action: str,
         user_id: uuid.UUID,
-        org_id: uuid.UUID,
         product_id: uuid.UUID,
+        org_id: Optional[uuid.UUID] = None,
         request: Optional[Request] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ActivityLog:

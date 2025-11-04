@@ -12,7 +12,6 @@ from app.api.deps import CurrentUser, DB
 from app.models.models import (
     Configurator,
     Hotspot,
-    OrgMember,
     Product,
     ProductStatus,
     PublishLink,
@@ -28,7 +27,6 @@ from app.schemas.products import (
 )
 from app.services.activity_service import ActivityService
 from app.services.licensing_service import LicensingService
-from app.services.organization_service import OrganizationService
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["products"])
@@ -44,9 +42,26 @@ def _slugify(text: str) -> str:
     return text[:100]
 
 
-async def _get_user_org_id(db: DB, user_id: uuid.UUID) -> Optional[uuid.UUID]:
-    """Get or create user's primary organization ID."""
-    return await OrganizationService.get_or_create_org_id(db, user_id)
+async def _generate_unique_slug(
+    db: DB, base_slug: str, exclude_id: Optional[uuid.UUID] = None
+) -> str:
+    pattern = f"{base_slug}%"
+    res = await db.execute(
+        select(Product.slug, Product.id).where(Product.slug.like(pattern))
+    )
+    rows = res.all()
+    existing = {slug for slug, pid in rows if exclude_id is None or pid != exclude_id}
+    if base_slug not in existing:
+        return base_slug
+    i = 2
+    while True:
+        cand = f"{base_slug}-{i}"
+        if cand not in existing:
+            return cand
+        i += 1
+
+
+# No org context needed; keep API org-free
 
 
 @router.get("/products", response_model=dict)
@@ -61,16 +76,8 @@ async def list_products(
     sort: str = Query("-createdAt"),
 ):
     """List products with filtering and pagination."""
-    org_id = await _get_user_org_id(db, current_user.id)
-
-    if not org_id:
-        return api_success({"items": [], "meta": {"page": 1, "pageSize": page_size, "total": 0, "totalPages": 0}})
-
     # Base query
-    query = select(Product).where(
-        Product.org_id == org_id,
-        Product.deleted_at.is_(None),
-    )
+    query = select(Product).where(Product.deleted_at.is_(None))
 
     # Apply filters (DB has no metadata column; search name only)
     if q:
@@ -87,12 +94,17 @@ async def list_products(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Apply sorting
-    if sort.startswith("-"):
-        sort_field = sort[1:]
-        order_col = desc(getattr(Product, sort_field, Product.created_at))
-    else:
-        order_col = getattr(Product, sort, Product.created_at)
+    # Apply sorting (map friendly keys to real DB columns)
+    desc_order = sort.startswith("-")
+    sort_field = sort[1:] if desc_order else sort
+    field_map = {
+        "createdAt": Product.created_date,
+        "updatedAt": Product.updated_date,
+        "name": Product.name,
+        "status": Product.status,
+    }
+    order_base = field_map.get(sort_field, Product.created_date)
+    order_col = desc(order_base) if desc_order else order_base
 
     query = query.order_by(order_col)
 
@@ -107,7 +119,7 @@ async def list_products(
     # Build response
     items = [
         ProductResponse(
-            id=f"prod-{str(p.id)[:8]}",
+            id=str(p.id),
             name=p.name,
             description=None,
             brand=None,
@@ -125,7 +137,7 @@ async def list_products(
 
     return api_success(
         {
-            "items": [item.model_dump() for item in items],
+            "items": [item.model_dump(exclude_none=True) for item in items],
             "meta": {
                 "page": page,
                 "pageSize": page_size,
@@ -144,8 +156,6 @@ async def create_product(
     db: DB,
 ):
     """Create a new product."""
-    org_id = await _get_user_org_id(db, current_user.id)
-
     # Check quota
     allowed, quota_info = await LicensingService.check_quota(db, current_user.id, "max_products")
 
@@ -155,12 +165,11 @@ async def create_product(
             detail=f"Product limit exceeded. Upgrade your plan to create more products.",
         )
 
-    # Generate slug
-    slug = _slugify(payload.name)
+    # Generate unique slug per org
+    slug = await _generate_unique_slug(db, _slugify(payload.name))
 
     # Create product (DB doesn't have tags/metadata columns)
     product = Product(
-        org_id=org_id,
         name=payload.name,
         slug=slug,
         status=ProductStatus.DRAFT,
@@ -178,7 +187,6 @@ async def create_product(
         db=db,
         action="product.created",
         user_id=current_user.id,
-        org_id=org_id,
         product_id=product.id,
         request=request,
     )
@@ -187,7 +195,7 @@ async def create_product(
     await db.refresh(product)
 
     response_data = ProductResponse(
-        id=f"prod-{str(product.id)[:8]}",
+        id=str(product.id),
         name=product.name,
         description=payload.description,
         brand=payload.brand,
@@ -199,7 +207,7 @@ async def create_product(
         updated_at=product.updated_at,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.get("/products/{product_id}", response_model=dict)
@@ -211,15 +219,9 @@ async def get_product(
     """Get product by ID."""
     # Parse product ID
     try:
-        # Handle both "prod-xxx" and UUID formats
-        if product_id.startswith("prod-"):
-            product_id = product_id[5:]
-
-        prod_uuid = uuid.UUID(product_id) if len(product_id) > 8 else None
+        prod_uuid = uuid.UUID(product_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     # Fetch product with configurator
     result = await db.execute(
@@ -227,7 +229,6 @@ async def get_product(
         .options(joinedload(Product.configurator))
         .where(
             Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
-            Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
     )
@@ -244,7 +245,7 @@ async def get_product(
         configurator_data = ConfiguratorSettings(**cfg)
 
     response_data = ProductResponse(
-        id=f"prod-{str(product.id)[:8]}",
+        id=str(product.id),
         name=product.name,
         description=None,
         brand=None,
@@ -257,7 +258,7 @@ async def get_product(
         configurator=configurator_data,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.patch("/products/{product_id}", response_model=dict)
@@ -271,18 +272,13 @@ async def update_product(
     """Update product fields."""
     # Parse and fetch product (same logic as get)
     try:
-        if product_id.startswith("prod-"):
-            product_id = product_id[5:]
-        prod_uuid = uuid.UUID(product_id) if len(product_id) > 8 else None
+        prod_uuid = uuid.UUID(product_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Product).where(
             Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
-            Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
     )
@@ -294,7 +290,7 @@ async def update_product(
     # Update fields
     if payload.name is not None:
         product.name = payload.name
-        product.slug = _slugify(payload.name)
+        product.slug = await _generate_unique_slug(db, _slugify(payload.name), exclude_id=product.id)
 
     metadata = product.product_metadata or {}
     if payload.description is not None:
@@ -308,12 +304,11 @@ async def update_product(
 
     # No backing column for metadata/tags, so we don't persist them
 
-    # Log activity
+    # Log activity (no org context)
     await ActivityService.log_product_action(
         db=db,
         action="product.updated",
         user_id=current_user.id,
-        org_id=org_id,
         product_id=product.id,
         request=request,
     )
@@ -322,7 +317,7 @@ async def update_product(
     await db.refresh(product)
 
     response_data = ProductResponse(
-        id=f"prod-{str(product.id)[:8]}",
+        id=str(product.id),
         name=product.name,
         description=metadata.get("description"),
         brand=metadata.get("brand"),
@@ -334,7 +329,7 @@ async def update_product(
         updated_at=product.updated_at,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.put("/products/{product_id}", response_model=dict)
@@ -347,18 +342,13 @@ async def replace_product(
 ):
     """Replace all mutable fields on a product."""
     try:
-        if product_id.startswith("prod-"):
-            product_id = product_id[5:]
-        prod_uuid = uuid.UUID(product_id) if len(product_id) > 8 else None
+        prod_uuid = uuid.UUID(product_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Product).where(
             Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
-            Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
     )
@@ -368,7 +358,7 @@ async def replace_product(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
     product.name = payload.name
-    product.slug = _slugify(payload.name)
+    product.slug = await _generate_unique_slug(db, _slugify(payload.name), exclude_id=product.id)
     # No backing column for metadata/tags, so we don't persist them
     _metadata = {
         "description": payload.description,
@@ -381,7 +371,6 @@ async def replace_product(
         db=db,
         action="product.replaced",
         user_id=current_user.id,
-        org_id=org_id,
         product_id=product.id,
         request=request,
     )
@@ -390,7 +379,7 @@ async def replace_product(
     await db.refresh(product)
 
     response_data = ProductResponse(
-        id=f"prod-{str(product.id)[:8]}",
+        id=str(product.id),
         name=product.name,
         description=_metadata.get("description"),
         brand=_metadata.get("brand"),
@@ -402,7 +391,7 @@ async def replace_product(
         updated_at=product.updated_at,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.delete("/products/{product_id}", response_model=dict)
@@ -414,18 +403,13 @@ async def delete_product(
 ):
     """Delete a product (soft delete)."""
     try:
-        if product_id.startswith("prod-"):
-            product_id = product_id[5:]
-        prod_uuid = uuid.UUID(product_id) if len(product_id) > 8 else None
+        prod_uuid = uuid.UUID(product_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Product).where(
             Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
-            Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
     )
@@ -442,7 +426,6 @@ async def delete_product(
         db=db,
         action="product.deleted",
         user_id=current_user.id,
-        org_id=org_id,
         product_id=product.id,
         request=request,
     )
@@ -461,20 +444,15 @@ async def update_configurator(
 ):
     """Update product configurator settings."""
     try:
-        if product_id.startswith("prod-"):
-            product_id = product_id[5:]
-        prod_uuid = uuid.UUID(product_id) if len(product_id) > 8 else None
+        prod_uuid = uuid.UUID(product_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Product)
         .options(joinedload(Product.configurator))
         .where(
             Product.id == prod_uuid if prod_uuid else Product.id.like(f"{product_id}%"),
-            Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
     )
@@ -509,18 +487,13 @@ async def publish_product(
 ):
     """Publish or unpublish a product."""
     try:
-        if product_id.startswith("prod-"):
-            product_id = product_id[5:]
-        prod_uuid = uuid.UUID(product_id) if len(product_id) > 8 else None
+        prod_uuid = uuid.UUID(product_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Product).where(
             Product.id == prod_uuid if prod_uuid else cast(Product.id, String).like(f"{product_id}%"),
-            Product.org_id == org_id,
             Product.deleted_at.is_(None),
         )
     )
@@ -564,7 +537,6 @@ async def publish_product(
             db=db,
             action="product.published",
             user_id=current_user.id,
-            org_id=org_id,
             product_id=product.id,
             request=request,
         )
@@ -586,7 +558,6 @@ async def publish_product(
             db=db,
             action="product.unpublished",
             user_id=current_user.id,
-            org_id=org_id,
             product_id=product.id,
             request=request,
         )
@@ -598,4 +569,4 @@ async def publish_product(
         published_at=now if payload.publish else None,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))

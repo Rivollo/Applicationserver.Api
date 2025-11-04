@@ -8,14 +8,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import desc, func, or_, select, cast, String
 
 from app.api.deps import CurrentUser, DB
-from app.models.models import Gallery, GalleryItem, OrgMember, Product
+from app.models.models import Gallery, GalleryItem, Product, Organization
 from app.schemas.galleries import (
     GalleryCreate,
     GalleryResponse,
     GalleryUpdate,
 )
 from app.services.licensing_service import LicensingService
-from app.services.organization_service import OrganizationService
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["galleries"])
@@ -31,9 +30,10 @@ def _slugify(text: str) -> str:
     return text[:100]
 
 
-async def _get_user_org_id(db: DB, user_id: uuid.UUID) -> Optional[uuid.UUID]:
-    """Get or create the user's primary organization ID."""
-    return await OrganizationService.get_or_create_org_id(db, user_id)
+# No unique slug helper; slug is simple slugify(name)
+
+
+ # Org-free galleries
 
 
 async def _check_gallery_access(db: DB, user_id: uuid.UUID) -> bool:
@@ -61,18 +61,8 @@ async def list_galleries(
             detail="Gallery access requires Pro or Enterprise plan",
         )
 
-    org_id = await _get_user_org_id(db, current_user.id)
-
-    if not org_id:
-        return api_success(
-            {"items": [], "meta": {"page": 1, "pageSize": page_size, "total": 0, "totalPages": 0}}
-        )
-
     # Base query
-    query = select(Gallery).where(
-        Gallery.org_id == org_id,
-        Gallery.deleted_at.is_(None),
-    )
+    query = select(Gallery).where(Gallery.deleted_at.is_(None))
 
     # Apply filters
     if q:
@@ -92,12 +82,16 @@ async def list_galleries(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Apply sorting
-    if sort.startswith("-"):
-        sort_field = sort[1:]
-        order_col = desc(getattr(Gallery, sort_field, Gallery.created_at))
-    else:
-        order_col = getattr(Gallery, sort, Gallery.created_at)
+    # Apply sorting (map friendly keys to real DB columns)
+    desc_order = sort.startswith("-")
+    sort_field = sort[1:] if desc_order else sort
+    field_map = {
+        "createdAt": Gallery.created_date,
+        "updatedAt": Gallery.updated_date,
+        "name": Gallery.name,
+    }
+    order_base = field_map.get(sort_field, Gallery.created_date)
+    order_col = desc(order_base) if desc_order else order_base
 
     query = query.order_by(order_col)
 
@@ -123,7 +117,7 @@ async def list_galleries(
 
         items.append(
             GalleryResponse(
-                id=f"gallery-{str(gallery.id)[:8]}",
+                id=str(gallery.id),
                 name=gallery.name,
                 description=gallery.settings.get("description"),
                 thumbnailColor=gallery.settings.get("thumbnail_color"),
@@ -141,7 +135,7 @@ async def list_galleries(
 
     return api_success(
         {
-            "items": [item.model_dump() for item in items],
+            "items": [item.model_dump(exclude_none=True) for item in items],
             "meta": {
                 "page": page,
                 "pageSize": page_size,
@@ -167,15 +161,12 @@ async def create_gallery(
             detail="Gallery creation requires Pro or Enterprise plan",
         )
 
-    org_id = await _get_user_org_id(db, current_user.id)
-
     # Check quota (Pro = 10 galleries)
     plan_code = await LicensingService.get_user_plan_code(db, current_user.id)
     if plan_code == "pro":
         # Count existing galleries
         result = await db.execute(
             select(func.count(Gallery.id)).where(
-                Gallery.org_id == org_id,
                 Gallery.deleted_at.is_(None),
             )
         )
@@ -187,12 +178,21 @@ async def create_gallery(
                 detail="Gallery limit exceeded. Upgrade to Enterprise for unlimited galleries.",
             )
 
+    # Ensure a default organization exists (org-free API uses a global org)
+    org_res = await db.execute(select(Organization).limit(1))
+    org = org_res.scalar_one_or_none()
+    if not org:
+        org = Organization(name="Default", slug="default")
+        db.add(org)
+        await db.commit()
+        await db.refresh(org)
+
     # Generate slug
     slug = _slugify(payload.name)
 
     # Create gallery (schema has no settings JSON field; don't persist settings)
     gallery = Gallery(
-        org_id=org_id,
+        org_id=org.id,
         name=payload.name,
         slug=slug,
         is_public=False,
@@ -204,7 +204,7 @@ async def create_gallery(
     await db.refresh(gallery)
 
     response_data = GalleryResponse(
-        id=f"gallery-{str(gallery.id)[:8]}",
+        id=str(gallery.id),
         name=gallery.name,
         description=payload.description,
         thumbnailColor=payload.thumbnail_color,
@@ -217,7 +217,7 @@ async def create_gallery(
         updatedAt=gallery.updated_at,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.get("/galleries/{gallery_id}", response_model=dict)
@@ -235,18 +235,13 @@ async def get_gallery(
         )
 
     try:
-        if gallery_id.startswith("gallery-"):
-            gallery_id = gallery_id[8:]
-        gallery_uuid = uuid.UUID(gallery_id) if len(gallery_id) > 8 else None
+        gallery_uuid = uuid.UUID(gallery_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gallery not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Gallery).where(
             Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
-            Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
     )
@@ -262,7 +257,7 @@ async def get_gallery(
     product_count = product_count_result.scalar() or 0
 
     response_data = GalleryResponse(
-        id=f"gallery-{str(gallery.id)[:8]}",
+        id=str(gallery.id),
         name=gallery.name,
         description=None,
         thumbnailColor=None,
@@ -275,7 +270,7 @@ async def get_gallery(
         updatedAt=gallery.updated_at,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.patch("/galleries/{gallery_id}", response_model=dict)
@@ -294,18 +289,13 @@ async def update_gallery(
         )
 
     try:
-        if gallery_id.startswith("gallery-"):
-            gallery_id = gallery_id[8:]
-        gallery_uuid = uuid.UUID(gallery_id) if len(gallery_id) > 8 else None
+        gallery_uuid = uuid.UUID(gallery_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gallery not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Gallery).where(
             Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
-            Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
     )
@@ -331,7 +321,7 @@ async def update_gallery(
     product_count = product_count_result.scalar() or 0
 
     response_data = GalleryResponse(
-        id=f"gallery-{str(gallery.id)[:8]}",
+        id=str(gallery.id),
         name=gallery.name,
         description=payload.description,
         thumbnailColor=payload.thumbnail_color,
@@ -344,7 +334,7 @@ async def update_gallery(
         updatedAt=gallery.updated_at,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.put("/galleries/{gallery_id}", response_model=dict)
@@ -363,18 +353,13 @@ async def replace_gallery(
         )
 
     try:
-        if gallery_id.startswith("gallery-"):
-            gallery_id = gallery_id[8:]
-        gallery_uuid = uuid.UUID(gallery_id) if len(gallery_id) > 8 else None
+        gallery_uuid = uuid.UUID(gallery_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gallery not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Gallery).where(
             Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
-            Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
     )
@@ -396,7 +381,7 @@ async def replace_gallery(
     product_count = product_count_result.scalar() or 0
 
     response_data = GalleryResponse(
-        id=f"gallery-{str(gallery.id)[:8]}",
+        id=str(gallery.id),
         name=gallery.name,
         description=payload.description,
         thumbnailColor=payload.thumbnail_color,
@@ -409,7 +394,7 @@ async def replace_gallery(
         updatedAt=gallery.updated_at,
     )
 
-    return api_success(response_data.model_dump())
+    return api_success(response_data.model_dump(exclude_none=True))
 
 
 @router.delete("/galleries/{gallery_id}", response_model=dict)
@@ -427,18 +412,13 @@ async def delete_gallery(
         )
 
     try:
-        if gallery_id.startswith("gallery-"):
-            gallery_id = gallery_id[8:]
-        gallery_uuid = uuid.UUID(gallery_id) if len(gallery_id) > 8 else None
+        gallery_uuid = uuid.UUID(gallery_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gallery not found")
-
-    org_id = await _get_user_org_id(db, current_user.id)
 
     result = await db.execute(
         select(Gallery).where(
             Gallery.id == gallery_uuid if gallery_uuid else cast(Gallery.id, String).like(f"{gallery_id}%"),
-            Gallery.org_id == org_id,
             Gallery.deleted_at.is_(None),
         )
     )
