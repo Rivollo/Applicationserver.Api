@@ -7,11 +7,14 @@ ENV UV_SYSTEM_PYTHON=1 \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-		curl \
-		build-essential \
-		gcc \
-	&& curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --install-dir /usr/local/bin \
-	&& rm -rf /var/lib/apt/lists/*
+        curl \
+        build-essential \
+        gcc \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --yes \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ensure uv is on PATH (installed to /root/.local/bin by default)
+ENV PATH="/root/.local/bin:${PATH}"
 
 COPY pyproject.toml uv.lock ./
 
