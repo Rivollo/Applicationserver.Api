@@ -11,10 +11,33 @@ _SessionLocal: Optional[async_sessionmaker[AsyncSession]] = None
 
 
 def _ensure_async_url(url: str) -> str:
+	"""Ensure the SQLAlchemy URL uses the asyncpg driver.
+
+	Handles common provider formats like:
+	- postgresql://...
+	- postgres://...
+	- postgresql+psycopg://... (or +psycopg2)
+
+	Returns the URL unchanged if it's already asyncpg.
+	"""
+	# Already async
 	if url.startswith("postgresql+asyncpg://"):
 		return url
+
+	# Normalize short scheme used by some providers (e.g. "postgres://")
+	if url.startswith("postgres://"):
+		return url.replace("postgres://", "postgresql+asyncpg://", 1)
+
+	# Upgrade plain postgresql to asyncpg
 	if url.startswith("postgresql://"):
 		return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+	# Migrate psycopg/psycopg2 URLs to asyncpg for async engine
+	if url.startswith("postgresql+psycopg2://"):
+		return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+	if url.startswith("postgresql+psycopg://"):
+		return url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
+
 	return url
 
 

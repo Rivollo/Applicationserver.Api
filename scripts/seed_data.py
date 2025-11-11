@@ -135,10 +135,16 @@ async def main() -> None:
     """Run all seed operations."""
     print("🌱 Seeding database...")
 
-    # Ensure async URL
+    # Ensure async URL (handle common provider variants)
     database_url = settings.DATABASE_URL
-    if database_url.startswith("postgresql://"):
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif database_url.startswith("postgresql+psycopg2://"):
+        database_url = database_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+    elif database_url.startswith("postgresql+psycopg://"):
+        database_url = database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
 
     engine = create_async_engine(database_url, echo=False)
     async_session = async_sessionmaker(engine, expire_on_commit=False)

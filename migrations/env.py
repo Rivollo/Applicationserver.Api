@@ -16,14 +16,21 @@ config = context.config
 
 
 def _get_database_url() -> str:
-	url = settings.DATABASE_URL
-	if not url:
-		raise RuntimeError("DATABASE_URL is not configured; cannot run migrations.")
-	if url.startswith("postgresql+asyncpg://"):
-		return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
-	if url.startswith("postgresql://"):
-		return url.replace("postgresql://", "postgresql+psycopg://", 1)
-	return url
+    url = settings.DATABASE_URL
+    if not url:
+        raise RuntimeError("DATABASE_URL is not configured; cannot run migrations.")
+    # If app uses asyncpg, switch to psycopg for Alembic (sync)
+    if url.startswith("postgresql+asyncpg://"):
+        return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    # Normalize short scheme and plain postgresql to psycopg
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    # Avoid needing psycopg2 in environments; prefer psycopg v3
+    if url.startswith("postgresql+psycopg2://"):
+        return url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
+    return url
 
 
 if config.config_file_name is not None:

@@ -19,7 +19,7 @@ APP_NAME=Rivollo API
 DEBUG=true
 # API_PREFIX must not end with '/'. Use empty for root or like '/v1'
 API_PREFIX=
-# Provide a Postgres URL, e.g. postgresql+psycopg2://user:pass@localhost:5432/rivollo
+# Provide a Postgres URL, e.g. postgresql+asyncpg://user:pass@localhost:5432/rivollo
 DATABASE_URL=
 JWT_SECRET=dev-change-me
 JWT_ALGORITHM=HS256
@@ -44,6 +44,7 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 Open docs at http://localhost:8000/docs
 
 ### Notes
+- The app auto-normalizes common Postgres URLs: `postgres://` and `postgresql://` are upgraded to `postgresql+asyncpg://` for the async engine. Alembic migrations normalize to `postgresql+psycopg://`.
 - Presigned uploads are stubbed: we return a temporary `uploadUrl` and a final `fileUrl` under `CDN_BASE_URL`. No binary is proxied through the API.
 - The 3D processing call is stubbed via `MODEL_SERVICE_URL=mock://...` and updates the job to `ready` with placeholder asset parts.
 - Database integration uses SQLAlchemy; provide a real `DATABASE_URL` for Postgres. For production, apply the schema in `API docs/database.txt` or use migrations.
