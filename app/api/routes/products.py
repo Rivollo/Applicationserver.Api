@@ -31,6 +31,8 @@ from app.schemas.products import (
     ProductImageItem,
     ProductListResponse,
     ProductResponse,
+    ProductStatusData,
+    ProductStatusResponse,
     ProductUpdate,
     PublishProductRequest,
     PublishProductResponse,
@@ -466,6 +468,79 @@ async def get_product_assets(product_id: str, db: DB):
     )
 
     return api_success(ProductAssetsResponse(data=data).model_dump())
+
+
+@router.get("/products/{product_id}/status", response_model=dict)
+async def get_product_status(product_id: str, db: DB):
+    """Get product status. If status is READY, returns assets. Otherwise returns status details."""
+    try:
+        product_uuid = uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid productId format. Expected UUID string.",
+        )
+
+    # Get product
+    product = await db.get(Product, product_uuid)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found.",
+        )
+
+    # If status is READY, return assets (same as get_product_assets)
+    if product.status == ProductStatus.READY:
+        # Join ProductAsset with ProductAssetMapping and AssetStatic
+        stmt = (
+            select(
+                ProductAsset.asset_id,
+                ProductAsset.image,
+                AssetStatic.name.label("asset_name"),
+                AssetStatic.assetid.label("asset_type_id"),
+            )
+            .join(ProductAssetMapping, ProductAsset.id == ProductAssetMapping.product_asset_id)
+            .join(AssetStatic, ProductAsset.asset_id == AssetStatic.id)
+            .where(ProductAssetMapping.productid == product_uuid)
+            .where(ProductAssetMapping.isactive == True)
+            .order_by(ProductAssetMapping.created_date.desc())
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        # Separate mesh (assetid = 2) from other images
+        meshurl: Optional[str] = None
+        images: list[ProductImageItem] = []
+
+        for row in rows:
+            asset_id, image_url, asset_name, asset_type_id = row
+            if asset_type_id == 2:
+                # This is the mesh (assetid = 2 in tbl_asset)
+                meshurl = image_url
+            else:
+                # This is a regular image
+                images.append(ProductImageItem(url=image_url, type=asset_name))
+
+        # Build response (same as get_product_assets)
+        data = ProductAssetsData(
+            id=str(product.id),
+            name=product.name,
+            meshurl=meshurl,
+            images=images,
+        )
+
+        return api_success(ProductAssetsResponse(data=data).model_dump())
+    else:
+        # Status is not READY, return status details with product info
+        status_data = ProductStatusData(
+            id=str(product.id),
+            name=product.name,
+            status=product.status.value,
+            created_at=product.created_at,
+            updated_at=product.updated_at,
+        )
+
+        return api_success(ProductStatusResponse(data=status_data).model_dump())
 
 
 @router.patch("/products/{product_id}", response_model=dict)
