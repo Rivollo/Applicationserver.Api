@@ -463,6 +463,7 @@ async def get_product_assets(product_id: str, db: DB):
     data = ProductAssetsData(
         id=str(product.id),
         name=product.name,
+        status=product.status.value,
         meshurl=meshurl,
         images=images,
     )
@@ -525,6 +526,7 @@ async def get_product_status(product_id: str, db: DB):
         data = ProductAssetsData(
             id=str(product.id),
             name=product.name,
+            status=product.status.value,
             meshurl=meshurl,
             images=images,
         )

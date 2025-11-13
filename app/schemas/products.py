@@ -96,6 +96,7 @@ class ProductAssetsData(BaseModel):
 
     id: str
     name: str
+    status: str
     meshurl: Optional[str] = None
     images: list[ProductImageItem] = Field(default_factory=list)
 
