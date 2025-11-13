@@ -702,3 +702,39 @@ class AssetPart(UUIDMixin, CreatedAtMixin, Base):
 
 # Alias for backwards compatibility
 JobStatusEnum = JobStatus
+
+
+class ProductAsset(AuditMixin, Base):
+    __tablename__ = "tbl_product_assets"
+
+    # Database has id as UUID with default gen_random_uuid()
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    asset_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    image: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
+
+
+class ProductAssetMapping(AuditMixin, Base):
+    __tablename__ = "tbl_product_asset_mapping"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    productid: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
+    )
+    product_asset_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), nullable=False  # Changed to UUID to match tbl_product_assets.id
+        # PGUUID(as_uuid=True), ForeignKey("tbl_product_assets.id", ondelete="CASCADE"), nullable=False
+    )
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+
+class AssetStatic(AuditMixin, Base):
+    """Static asset reference table (tbl_asset)."""
+    __tablename__ = "tbl_asset"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    assetid: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))

@@ -72,11 +72,9 @@ class ProductListResponse(BaseModel):
 
 
 class PublishProductRequest(BaseModel):
-    """Request to publish or unpublish a product."""
+    """Publish/unpublish request."""
 
-    publish: bool = True
-    channel: Optional[str] = None
-    message: Optional[str] = None
+    publish: bool
 
 
 class PublishProductResponse(BaseModel):
@@ -84,6 +82,28 @@ class PublishProductResponse(BaseModel):
 
     published: bool
     published_at: Optional[datetime] = None
+
+
+class ProductImageItem(BaseModel):
+    """Image item in product assets response."""
+
+    url: str
+    type: str
+
+
+class ProductAssetsData(BaseModel):
+    """Product assets data."""
+
+    id: str
+    name: str
+    meshurl: Optional[str] = None
+    images: list[ProductImageItem] = Field(default_factory=list)
+
+
+class ProductAssetsResponse(BaseModel):
+    """Response containing product assets."""
+
+    data: ProductAssetsData
 
 
 # === Hotspot Schemas ===
