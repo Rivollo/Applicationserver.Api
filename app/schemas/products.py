@@ -106,6 +106,22 @@ class ProductAssetsResponse(BaseModel):
     data: ProductAssetsData
 
 
+class ProductStatusData(BaseModel):
+    """Product status data when not ready."""
+
+    id: str
+    name: str
+    status: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ProductStatusResponse(BaseModel):
+    """Response containing product status."""
+
+    data: ProductStatusData
+
+
 # === Hotspot Schemas ===
 
 
