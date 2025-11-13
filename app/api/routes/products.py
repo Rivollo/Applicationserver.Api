@@ -1,24 +1,34 @@
 """Product management routes."""
 
+import io
 import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+import asyncio
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy import desc, func, or_, select, cast, String
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import CurrentUser, DB
 from app.models.models import (
+    AssetStatic,
     Configurator,
     Hotspot,
     Product,
+    ProductAsset,
+    ProductAssetMapping,
     ProductStatus,
     PublishLink,
 )
 from app.schemas.products import (
     ConfiguratorSettings,
+    ProductAssetsData,
+    ProductAssetsResponse,
     ProductCreate,
+    ProductImageItem,
     ProductListResponse,
     ProductResponse,
     ProductUpdate,
@@ -27,6 +37,8 @@ from app.schemas.products import (
 )
 from app.services.activity_service import ActivityService
 from app.services.licensing_service import LicensingService
+from app.services.product_service import product_service
+from app.services.storage import storage_service
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["products"])
@@ -210,6 +222,141 @@ async def create_product(
     return api_success(response_data.model_dump(exclude_none=True))
 
 
+@router.post("/createProduct", response_model=dict, status_code=status.HTTP_201_CREATED)
+async def create_product_with_image(
+    request: Request,
+    db: DB,
+    userId: str = Form(..., description="User ID creating the product"),
+    name: str = Form(..., min_length=1, max_length=200, description="Product name"),
+    asset_id: int = Form(..., description="Asset ID (integer)"),
+    mesh_asset_id: int = Form(..., description="Mesh asset ID for generated output (integer)"),
+    target_format: str = Form(..., description="Target format for external API (e.g., glb, obj)"),
+    image: UploadFile = File(..., description="Image file to upload (JPG, PNG, WEBP, GIF)"),
+):
+    """Create a new product with an image file upload (authentication disabled for testing)."""
+    # Validate user ID
+    try:
+        user_uuid = uuid.UUID(userId)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid userId format. Expected UUID string.",
+        )
+
+    # Validate file type
+    if not image.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image file is required",
+        )
+
+    # Validate image file extension
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    file_ext = None
+    for ext in allowed_extensions:
+        if image.filename.lower().endswith(ext):
+            file_ext = ext
+            break
+    
+    if not file_ext:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid image format. Allowed formats: {', '.join(allowed_extensions)}",
+        )
+
+    # Read image file
+    try:
+        image_bytes = await image.read()
+        content_type = image.content_type or f"image/{file_ext[1:]}"
+        filename = image.filename or f"product-image{file_ext}"
+        image_stream = io.BytesIO(image_bytes)
+        image_size_bytes = len(image_bytes)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read image file: {str(e)}",
+        )
+
+    # Use ProductService to create product and upload image
+    try:
+        product, blob_url, external_job_uid = await product_service.create_product_with_image(
+            db=db,
+            user_id=user_uuid,
+            name=name,
+            asset_id=asset_id,
+            mesh_asset_id=mesh_asset_id,
+            target_format=target_format,
+            image_stream=image_stream,
+            image_filename=filename,
+            image_content_type=content_type,
+            image_size_bytes=image_size_bytes,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+    except Exception as e:
+        # Catch all other exceptions and return the actual error for debugging
+        import traceback
+        error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail,
+        )
+
+    # Log activity - COMMENTED OUT FOR TESTING (might be causing timeout)
+    # await ActivityService.log_product_action(
+    #     db=db,
+    #     action="product.created",
+    #     user_id=user_uuid,
+    #     product_id=product.id,
+    #     request=request,
+    # )
+
+    response_data = ProductResponse(
+        id=str(product.id),
+        name=product.name,
+        description=None,
+        brand=None,
+        accent_color="#2563EB",
+        accent_overlay=None,
+        tags=[],
+        status=product.status.value,
+        created_at=product.created_at,
+        updated_at=product.updated_at,
+    )
+
+    # Return response with blob URL
+    response_dict = response_data.model_dump(exclude_none=True)
+    response_dict["image_blob_url"] = blob_url
+
+    # Kick off background polling for external API
+    if external_job_uid:
+        engine = db.bind
+        if engine is not None:
+            session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+            asyncio.create_task(
+                product_service.poll_external_api_and_finalize(
+                    session_factory=session_factory,
+                    user_id=user_uuid,
+                    product_id=product.id,
+                    asset_id=asset_id,
+                    mesh_asset_id=mesh_asset_id,
+                    name=name,
+                    target_format=target_format,
+                    job_uid=external_job_uid,
+                )
+            )
+
+    return api_success(response_dict)
+
+
 @router.get("/products/{product_id}", response_model=dict)
 async def get_product(
     product_id: str,
@@ -259,6 +406,66 @@ async def get_product(
     )
 
     return api_success(response_data.model_dump(exclude_none=True))
+
+
+@router.get("/products/{product_id}/assets", response_model=dict)
+async def get_product_assets(product_id: str, db: DB):
+    """Return all assets associated with a product."""
+    try:
+        product_uuid = uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid productId format. Expected UUID string.",
+        )
+
+    # Get product to retrieve name
+    product = await db.get(Product, product_uuid)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found.",
+        )
+
+    # Join ProductAsset with ProductAssetMapping and AssetStatic
+    stmt = (
+        select(
+            ProductAsset.asset_id,
+            ProductAsset.image,
+            AssetStatic.name.label("asset_name"),
+            AssetStatic.assetid.label("asset_type_id"),
+        )
+        .join(ProductAssetMapping, ProductAsset.id == ProductAssetMapping.product_asset_id)
+        .join(AssetStatic, ProductAsset.asset_id == AssetStatic.id)
+        .where(ProductAssetMapping.productid == product_uuid)
+        .where(ProductAssetMapping.isactive == True)
+        .order_by(ProductAssetMapping.created_date.desc())
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Separate mesh (assetid = 2) from other images
+    meshurl: Optional[str] = None
+    images: list[ProductImageItem] = []
+
+    for row in rows:
+        asset_id, image_url, asset_name, asset_type_id = row
+        if asset_type_id == 2:
+            # This is the mesh (assetid = 2 in tbl_asset)
+            meshurl = image_url
+        else:
+            # This is a regular image
+            images.append(ProductImageItem(url=image_url, type=asset_name))
+
+    # Build response
+    data = ProductAssetsData(
+        id=str(product.id),
+        name=product.name,
+        meshurl=meshurl,
+        images=images,
+    )
+
+    return api_success(ProductAssetsResponse(data=data).model_dump())
 
 
 @router.patch("/products/{product_id}", response_model=dict)
