@@ -123,6 +123,25 @@ class ProductStatusResponse(BaseModel):
     data: ProductStatusData
 
 
+class ProductWithPrimaryAsset(BaseModel):
+    """Product with primary asset (asset_id = 1)."""
+
+    id: str
+    name: str
+    status: str
+    image: Optional[str] = None
+    asset_type: Optional[str] = None
+    asset_type_id: Optional[int] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class ProductsByUserResponse(BaseModel):
+    """Response containing list of products with primary assets for a user."""
+
+    items: list[ProductWithPrimaryAsset]
+
+
 # === Hotspot Schemas ===
 
 
