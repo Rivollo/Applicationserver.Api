@@ -473,7 +473,7 @@ async def get_product_assets(product_id: str, db: DB):
     return api_success(ProductAssetsResponse(data=data).model_dump())
 
 
-@router.get("/products/user/{userId}", response_model=dict)
+@router.get("/products/user/{userId}/products", response_model=dict)
 async def get_products_by_user(userId: str, db: DB):
     """Get all products for a user with their primary asset (asset_id = 1)."""
     try:
