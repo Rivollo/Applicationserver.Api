@@ -8,7 +8,7 @@ from typing import Optional
 import asyncio
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import desc, func, or_, select, cast, String
+from sqlalchemy import and_, desc, func, or_, select, cast, String
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import joinedload
 
@@ -30,10 +30,12 @@ from app.schemas.products import (
     ProductCreate,
     ProductImageItem,
     ProductListResponse,
+    ProductsByUserResponse,
     ProductResponse,
     ProductStatusData,
     ProductStatusResponse,
     ProductUpdate,
+    ProductWithPrimaryAsset,
     PublishProductRequest,
     PublishProductResponse,
 )
@@ -469,6 +471,102 @@ async def get_product_assets(product_id: str, db: DB):
     )
 
     return api_success(ProductAssetsResponse(data=data).model_dump())
+
+
+@router.get("/products/user/{userId}", response_model=dict)
+async def get_products_by_user(userId: str, db: DB):
+    """Get all products for a user with their primary asset (asset_id = 1)."""
+    try:
+        user_uuid = uuid.UUID(userId)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid userId format. Expected UUID string.",
+        )
+
+    # Query products with LEFT JOIN to get primary asset (asset_id = 1) in a single query
+    # Using a subquery to get the latest primary asset per product
+    
+    # Subquery to get the latest primary asset image per product
+    # First, create a subquery with row_number
+    ranked_assets = (
+        select(
+            ProductAssetMapping.productid,
+            ProductAsset.image,
+            ProductAsset.asset_id,
+            AssetStatic.name.label("asset_name"),
+            func.row_number()
+            .over(
+                partition_by=ProductAssetMapping.productid,
+                order_by=ProductAssetMapping.created_date.desc()
+            )
+            .label("rn")
+        )
+        .join(ProductAsset, ProductAsset.id == ProductAssetMapping.product_asset_id)
+        .join(AssetStatic, ProductAsset.asset_id == AssetStatic.id)
+        .where(
+            ProductAsset.asset_id == 1,  # Primary asset
+            ProductAssetMapping.isactive == True,
+        )
+        .subquery()
+    )
+    
+    # Filter to get only rn == 1 (latest per product)
+    primary_asset_subquery = (
+        select(
+            ranked_assets.c.productid,
+            ranked_assets.c.image,
+            ranked_assets.c.asset_id,
+            ranked_assets.c.asset_name,
+        )
+        .where(ranked_assets.c.rn == 1)
+        .subquery()
+    )
+    
+    # Main query: products LEFT JOIN with primary asset subquery
+    query = (
+        select(
+            Product.id,
+            Product.name,
+            Product.status,
+            Product.created_date,
+            Product.updated_date,
+            primary_asset_subquery.c.image.label("image"),
+            primary_asset_subquery.c.asset_name.label("asset_type"),
+            primary_asset_subquery.c.asset_id.label("asset_type_id"),
+        )
+        .outerjoin(
+            primary_asset_subquery,
+            Product.id == primary_asset_subquery.c.productid
+        )
+        .where(
+            Product.created_by == user_uuid,
+            Product.deleted_at.is_(None),
+        )
+        .order_by(Product.created_date.desc())
+    )
+    
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Build response items
+    items: list[ProductWithPrimaryAsset] = []
+    for row in rows:
+        product_id, name, product_status, created_date, updated_date, image, asset_type, asset_type_id = row
+        items.append(
+            ProductWithPrimaryAsset(
+                id=str(product_id),
+                name=name,
+                status=product_status.value,
+                image=image,
+                asset_type=asset_type,
+                asset_type_id=asset_type_id,
+                created_at=created_date,
+                updated_at=updated_date,
+            )
+        )
+
+    return api_success(ProductsByUserResponse(items=items).model_dump())
 
 
 @router.get("/products/{product_id}/status", response_model=dict)
