@@ -33,5 +33,9 @@ class Settings(BaseSettings):
 	ENABLE_APP_INSIGHTS: bool = Field(default=True)
 	SAMPLING_RATIO: float = Field(default=1.0)
 
+	# Public API basic auth
+	PUBLIC_API_USERNAME: str = Field(default="public")
+	PUBLIC_API_PASSWORD: str = Field(default="public-secret")
+
 
 settings = Settings()
