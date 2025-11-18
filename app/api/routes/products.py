@@ -7,13 +7,13 @@ from datetime import datetime
 from typing import Optional
 
 import asyncio
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import and_, desc, func, or_, select, cast, String, insert, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import joinedload
 
-from app.api.deps import CurrentUser, DB
+from app.api.deps import CurrentUser, DB, get_current_user
 from app.models.models import (
     AssetStatic,
     Background,
@@ -60,7 +60,8 @@ from app.services.product_service import product_service
 from app.services.storage import storage_service
 from app.utils.envelopes import api_success
 
-router = APIRouter(tags=["products"])
+router = APIRouter(tags=["products"], dependencies=[Depends(get_current_user)])
+public_router = APIRouter(tags=["products"])
 
 
 def _slugify(text: str) -> str:
@@ -379,7 +380,7 @@ async def create_product_with_image(
 @router.get("/products/{product_id}", response_model=dict)
 async def get_product(
     product_id: str,
-    # current_user: CurrentUser,  # Temporarily disabled for testing
+    current_user: CurrentUser,
     db: DB,
 ):
     """Get product by ID."""
@@ -494,9 +495,8 @@ async def get_product(
         )
 
 
-@router.get("/products/{product_id}/assets", response_model=dict)
-async def get_product_assets(product_id: str, db: DB):
-    """Return all assets associated with a product."""
+async def _build_product_assets_response(product_id: str, db: DB) -> dict:
+    """Shared builder for product assets response."""
     try:
         product_uuid = uuid.UUID(product_id)
     except ValueError:
@@ -647,7 +647,26 @@ async def get_product_assets(product_id: str, db: DB):
         links=links_data,
     )
 
-    return api_success(ProductAssetsResponse(data=data).model_dump())
+    return ProductAssetsResponse(data=data).model_dump()
+
+
+@router.get("/products/{product_id}/assets", response_model=dict)
+async def get_product_assets(
+    product_id: str,
+    current_user: CurrentUser,
+    db: DB,
+):
+    """Return all assets associated with a product (authenticated)."""
+    return api_success(await _build_product_assets_response(product_id, db))
+
+
+@public_router.get("/public/products/{product_id}/assets", response_model=dict)
+async def get_product_assets_public(
+    product_id: str,
+    db: DB,
+):
+    """Public (unauthenticated) endpoint that returns product assets."""
+    return api_success(await _build_product_assets_response(product_id, db))
 
 
 @router.get("/products/user/{userId}/products", response_model=dict)
