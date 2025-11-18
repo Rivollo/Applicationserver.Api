@@ -2,18 +2,21 @@
 
 import io
 import logging
+import secrets
 import uuid
 from datetime import datetime
 from typing import Optional
 
 import asyncio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from sqlalchemy import and_, desc, func, or_, select, cast, String, insert, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import CurrentUser, DB, get_current_user
+from app.core.config import settings
 from app.models.models import (
     AssetStatic,
     Background,
@@ -61,7 +64,25 @@ from app.services.storage import storage_service
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["products"], dependencies=[Depends(get_current_user)])
-public_router = APIRouter(tags=["products"])
+basic_auth_scheme = HTTPBasic()
+
+
+def verify_public_basic_auth(credentials: HTTPBasicCredentials = Depends(basic_auth_scheme)) -> None:
+    """Verify HTTP Basic auth credentials for public endpoints."""
+    correct_username = secrets.compare_digest(credentials.username, settings.PUBLIC_API_USERNAME)
+    correct_password = secrets.compare_digest(credentials.password, settings.PUBLIC_API_PASSWORD)
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+
+public_router = APIRouter(
+    tags=["products"],
+    dependencies=[Depends(verify_public_basic_auth)],
+)
 
 
 def _slugify(text: str) -> str:
