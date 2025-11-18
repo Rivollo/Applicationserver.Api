@@ -325,6 +325,11 @@ class Product(UUIDMixin, TimestampMixin, Base):
     # Keeping as virtual column for backward compatibility
     product_metadata = column_property(literal_column("'{}'::jsonb"))
     published_at = column_property(literal_column("NULL::timestamptz"))
+    # New columns added to tbl_products
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    price: Mapped[Optional[float]] = mapped_column(BigInteger)  # Price stored as integer (cents) or float value
+    currency_type: Mapped[Optional[int]] = mapped_column(Integer)  # Currency type ID (integer)
+    background_type: Mapped[Optional[int]] = mapped_column(Integer)  # Background ID (integer)
     # created_by, updated_by from TimestampMixin -> AuditMixin
     # Virtual column - products table doesn't have deleted_at in database
     deleted_at = column_property(literal_column("NULL::timestamptz"))
@@ -736,5 +741,53 @@ class AssetStatic(AuditMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     assetid: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+
+class CurrencyType(AuditMixin, Base):
+    """Currency type reference table (tbl_currencytype)."""
+    __tablename__ = "tbl_currencytype"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+
+class BackgroundType(AuditMixin, Base):
+    """Background type reference table (tbl_background_type)."""
+    __tablename__ = "tbl_background_type"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+
+class Background(AuditMixin, Base):
+    """Background reference table (tbl_background)."""
+    __tablename__ = "tbl_background"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    background_type_id: Mapped[int] = mapped_column(Integer, ForeignKey("tbl_background_type.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    image: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ProductLink(AuditMixin, Base):
+    """Product links table (tbl_product_links)."""
+    __tablename__ = "tbl_product_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    productid: Mapped[str] = mapped_column(
+        String, ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    link: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))

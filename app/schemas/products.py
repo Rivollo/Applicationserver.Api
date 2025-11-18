@@ -37,6 +37,25 @@ class ProductUpdate(BaseModel):
     tags: Optional[list[str]] = Field(None, max_items=20)
 
 
+class ProductLinkCreate(BaseModel):
+    """Product link create/update model."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    link: str = Field(..., min_length=1)
+    description: Optional[str] = Field(None, max_length=2000)
+
+
+class ProductDetailsUpdate(BaseModel):
+    """Product details update request for insert/update API."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    price: Optional[float] = Field(None, ge=0)
+    currency_type: Optional[int] = Field(None, description="Currency type ID (integer)")
+    backgroundid: Optional[int] = Field(None, description="Background ID from tbl_background")
+    links: Optional[list[ProductLinkCreate]] = Field(None, description="Multiple links for the product")
+
+
 class ConfiguratorSettings(BaseModel):
     """3D product configurator settings."""
 
@@ -96,9 +115,16 @@ class ProductAssetsData(BaseModel):
 
     id: str
     name: str
+    description: Optional[str] = None
+    price: Optional[float] = None
+    currency_type: Optional[int] = None
     status: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
     meshurl: Optional[str] = None
     images: list[ProductImageItem] = Field(default_factory=list)
+    background: Optional[dict] = None  # Background data with type
+    links: Optional[list[dict]] = None  # Product links
 
 
 class ProductAssetsResponse(BaseModel):
@@ -132,6 +158,10 @@ class ProductWithPrimaryAsset(BaseModel):
     image: Optional[str] = None
     asset_type: Optional[str] = None
     asset_type_id: Optional[int] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    currency_type: Optional[str] = None
+    background_type: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -140,6 +170,88 @@ class ProductsByUserResponse(BaseModel):
     """Response containing list of products with primary assets for a user."""
 
     items: list[ProductWithPrimaryAsset]
+
+
+class CurrencyTypeResponse(BaseModel):
+    """Currency type response model."""
+
+    id: int
+    code: str
+    name: str
+    symbol: str
+    description: Optional[str] = None
+    isactive: bool
+    created_by: Optional[str] = None
+    created_date: datetime
+    updated_by: Optional[str] = None
+    updated_date: Optional[datetime] = None
+
+
+class CurrencyTypesResponse(BaseModel):
+    """Response containing list of currency types."""
+
+    items: list[CurrencyTypeResponse]
+
+
+class BackgroundTypeResponse(BaseModel):
+    """Background type response model."""
+
+    id: int
+    name: str
+    description: Optional[str] = None
+    isactive: bool
+    created_by: Optional[str] = None
+    created_date: datetime
+    updated_by: Optional[str] = None
+    updated_date: Optional[datetime] = None
+
+
+class BackgroundTypesResponse(BaseModel):
+    """Response containing list of background types."""
+
+    items: list[BackgroundTypeResponse]
+
+
+class BackgroundResponse(BaseModel):
+    """Background response model."""
+
+    id: int
+    background_type_id: int
+    name: str
+    description: Optional[str] = None
+    isactive: bool
+    image: str
+    created_by: Optional[str] = None
+    created_date: datetime
+    updated_by: Optional[str] = None
+    updated_date: Optional[datetime] = None
+
+
+class BackgroundsResponse(BaseModel):
+    """Response containing list of backgrounds."""
+
+    items: list[BackgroundResponse]
+
+
+class ProductLinkResponse(BaseModel):
+    """Product link response model."""
+
+    id: int
+    productid: str
+    name: str
+    link: str
+    description: Optional[str] = None
+    isactive: bool
+    created_by: Optional[str] = None
+    created_date: datetime
+    updated_by: Optional[str] = None
+    updated_date: Optional[datetime] = None
+
+
+class ProductLinksResponse(BaseModel):
+    """Response containing list of product links."""
+
+    items: list[ProductLinkResponse]
 
 
 # === Hotspot Schemas ===
