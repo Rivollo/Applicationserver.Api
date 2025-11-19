@@ -544,7 +544,7 @@ async def _build_product_assets_response(product_id: str, db: DB) -> dict:
         )
         .join(ProductAssetMapping, ProductAsset.id == ProductAssetMapping.product_asset_id)
         .join(AssetStatic, ProductAsset.asset_id == AssetStatic.id)
-        .where(ProductAssetMapping.productid == product_uuid)
+        .where(ProductAssetMapping.productid == str(product_uuid))
         .where(ProductAssetMapping.isactive == True)
         .order_by(ProductAssetMapping.created_date.desc())
     )
@@ -701,97 +701,79 @@ async def get_products_by_user(userId: str, db: DB):
             detail="Invalid userId format. Expected UUID string.",
         )
 
-    # Query products with LEFT JOIN to get primary asset (asset_id = 1) in a single query
-    # Using a subquery to get the latest primary asset per product
-    
-    # Subquery to get the latest primary asset image per product
-    # First, create a subquery with row_number
-    ranked_assets = (
-        select(
-            ProductAssetMapping.productid,
-            ProductAsset.image,
-            ProductAsset.asset_id,
-            AssetStatic.name.label("asset_name"),
-            func.row_number()
-            .over(
-                partition_by=ProductAssetMapping.productid,
-                order_by=ProductAssetMapping.created_date.desc()
-            )
-            .label("rn")
-        )
-        .join(ProductAsset, ProductAsset.id == ProductAssetMapping.product_asset_id)
-        .join(AssetStatic, ProductAsset.asset_id == AssetStatic.id)
-        .where(
-            ProductAsset.asset_id == 1,  # Primary asset
-            ProductAssetMapping.isactive == True,
-        )
-        .subquery()
-    )
-    
-    # Filter to get only rn == 1 (latest per product)
-    primary_asset_subquery = (
-        select(
-            ranked_assets.c.productid,
-            ranked_assets.c.image,
-            ranked_assets.c.asset_id,
-            ranked_assets.c.asset_name,
-        )
-        .where(ranked_assets.c.rn == 1)
-        .subquery()
-    )
-    
-    # Main query: products LEFT JOIN with primary asset subquery
-    query = (
-        select(
-            Product.id,
-            Product.name,
-            Product.status,
-            Product.description,
-            Product.price,
-            Product.currency_type,
-            Product.background_type,
-            Product.created_date,
-            Product.updated_date,
-            primary_asset_subquery.c.image.label("image"),
-            primary_asset_subquery.c.asset_name.label("asset_type"),
-            primary_asset_subquery.c.asset_id.label("asset_type_id"),
-        )
-        .outerjoin(
-            primary_asset_subquery,
-            Product.id == primary_asset_subquery.c.productid
-        )
-        .where(
+    try:
+        # Fetch products for the user
+        # Order by updated_date DESC (most recent first), with nulls last
+        # Then by created_date DESC as secondary sort
+        products_query = select(Product).where(
             Product.created_by == user_uuid,
             Product.deleted_at.is_(None),
+        ).order_by(
+            func.coalesce(Product.updated_date, Product.created_date).desc()
         )
-        .order_by(Product.created_date.desc())
-    )
-    
-    result = await db.execute(query)
-    rows = result.all()
-
-    # Build response items
-    items: list[ProductWithPrimaryAsset] = []
-    for row in rows:
-        product_id, name, product_status, description, price, currency_type, background_type, created_date, updated_date, image, asset_type, asset_type_id = row
-        items.append(
-            ProductWithPrimaryAsset(
-                id=str(product_id),
-                name=name,
-                status=product_status.value,
-                image=image,
-                asset_type=asset_type,
-                asset_type_id=asset_type_id,
-                description=description,
-                price=float(price) if price is not None else None,
-                currency_type=currency_type,
-                background_type=background_type,
-                created_at=created_date,
-                updated_at=updated_date,
+        
+        products_result = await db.execute(products_query)
+        products = products_result.scalars().all()
+        
+        # Build response items
+        items: list[ProductWithPrimaryAsset] = []
+        
+        for product in products:
+            # Fetch primary asset (asset_id = 1) for this product
+            asset_query = (
+                select(
+                    ProductAsset.image,
+                    AssetStatic.name.label("asset_name"),
+                    ProductAsset.asset_id,
+                )
+                .join(ProductAssetMapping, ProductAsset.id == ProductAssetMapping.product_asset_id)
+                .join(AssetStatic, ProductAsset.asset_id == AssetStatic.id)
+                .where(
+                    ProductAssetMapping.productid == str(product.id),  # Cast to string
+                    ProductAsset.asset_id == 1,  # Primary asset
+                    ProductAssetMapping.isactive == True,
+                )
+                .order_by(ProductAssetMapping.created_date.desc())
+                .limit(1)
             )
-        )
+            
+            asset_result = await db.execute(asset_query)
+            asset_row = asset_result.first()
+            
+            image = None
+            asset_type = None
+            asset_type_id = None
+            
+            if asset_row:
+                image, asset_type, asset_type_id = asset_row
+            
+            items.append(
+                ProductWithPrimaryAsset(
+                    id=str(product.id),
+                    name=product.name,
+                    status=product.status.value,
+                    image=image,
+                    asset_type=asset_type,
+                    asset_type_id=asset_type_id,
+                    description=product.description,
+                    price=float(product.price) if product.price is not None else None,
+                    currency_type=str(product.currency_type) if product.currency_type is not None else None,
+                    background_type=str(product.background_type) if product.background_type is not None else None,
+                    created_at=product.created_at,
+                    updated_at=product.updated_at,
+                )
+            )
 
-    return api_success(ProductsByUserResponse(items=items).model_dump())
+        return api_success(ProductsByUserResponse(items=items).model_dump())
+    except Exception as e:
+        import traceback
+        logger = logging.getLogger(__name__)
+        error_msg = f"Error getting products by user: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get products: {str(e)}",
+        )
 
 
 @router.get("/products/{product_id}/status", response_model=dict)
@@ -815,46 +797,8 @@ async def get_product_status(product_id: str, db: DB):
 
     # If status is READY, return assets (same as get_product_assets)
     if product.status == ProductStatus.READY:
-        # Join ProductAsset with ProductAssetMapping and AssetStatic
-        stmt = (
-            select(
-                ProductAsset.asset_id,
-                ProductAsset.image,
-                AssetStatic.name.label("asset_name"),
-                AssetStatic.assetid.label("asset_type_id"),
-            )
-            .join(ProductAssetMapping, ProductAsset.id == ProductAssetMapping.product_asset_id)
-            .join(AssetStatic, ProductAsset.asset_id == AssetStatic.id)
-            .where(ProductAssetMapping.productid == product_uuid)
-            .where(ProductAssetMapping.isactive == True)
-            .order_by(ProductAssetMapping.created_date.desc())
-        )
-        result = await db.execute(stmt)
-        rows = result.all()
-
-        # Separate mesh (assetid = 2) from other images
-        meshurl: Optional[str] = None
-        images: list[ProductImageItem] = []
-
-        for row in rows:
-            asset_id, image_url, asset_name, asset_type_id = row
-            if asset_type_id == 2:
-                # This is the mesh (assetid = 2 in tbl_asset)
-                meshurl = image_url
-            else:
-                # This is a regular image
-                images.append(ProductImageItem(url=image_url, type=asset_name))
-
-        # Build response (same as get_product_assets)
-        data = ProductAssetsData(
-            id=str(product.id),
-            name=product.name,
-            status=product.status.value,
-            meshurl=meshurl,
-            images=images,
-        )
-
-        return api_success(ProductAssetsResponse(data=data).model_dump())
+        # Use the shared builder function
+        return api_success(await _build_product_assets_response(product_id, db))
     else:
         # Status is not READY, return status details with product info
         status_data = ProductStatusData(
