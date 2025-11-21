@@ -125,6 +125,7 @@ class ProductAssetsData(BaseModel):
     images: list[ProductImageItem] = Field(default_factory=list)
     background: Optional[dict] = None  # Background data with type
     links: Optional[list[dict]] = None  # Product links
+    hotspots: list["ProductAssetsHotspot"] = Field(default_factory=list)
 
 
 class ProductAssetsResponse(BaseModel):
@@ -265,12 +266,26 @@ class HotspotPosition(BaseModel):
     z: float = Field(..., ge=-1.0, le=1.0)
 
 
+class ProductAssetsHotspot(BaseModel):
+    """Hotspot item included in product assets."""
+
+    id: str
+    title: str
+    description: Optional[str] = None
+    position: HotspotPosition
+    hotspot_type: Optional[int] = None
+    order_index: int
+
+
 class HotspotCreate(BaseModel):
     """Create hotspot request."""
 
     title: str
     description: str
     position: HotspotPosition
+    hotspot_type: Optional[int] = Field(
+        None, description="Hotspot type ID from tbl_hotspot_type (optional)"
+    )
     text_font: Optional[str] = None
     text_color: Optional[str] = None
     bg_color: Optional[str] = None
@@ -290,6 +305,7 @@ class HotspotResponse(BaseModel):
     bg_color: Optional[str] = None
     action_type: str
     action_payload: dict[str, Any]
+    hotspot_type: Optional[int] = None
     order_index: int
     created_at: datetime
 
