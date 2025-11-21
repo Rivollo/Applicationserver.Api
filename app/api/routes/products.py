@@ -24,6 +24,7 @@ from app.models.models import (
     Configurator,
     CurrencyType,
     Hotspot,
+    HotspotType,
     Product,
     ProductAsset,
     ProductAssetMapping,
@@ -39,10 +40,12 @@ from app.schemas.products import (
     ConfiguratorSettings,
     CurrencyTypeResponse,
     CurrencyTypesResponse,
+    HotspotPosition,
+    HotspotTypeResponse,
+    HotspotTypesResponse,
     ProductAssetsData,
     ProductAssetsHotspot,
     ProductAssetsResponse,
-    HotspotPosition,
     ProductCreate,
     ProductDetailsUpdate,
     ProductImageItem,
@@ -398,6 +401,31 @@ async def create_product_with_image(
             )
 
     return api_success(response_dict)
+
+
+@router.get("/products/hotspottypes", response_model=dict)
+async def get_hotspot_types(db: DB):
+    """Get all hotspot types."""
+    query = select(HotspotType).order_by(HotspotType.id.asc())
+    
+    result = await db.execute(query)
+    hotspot_types = result.scalars().all()
+
+    items = [
+        HotspotTypeResponse(
+            id=ht.id,
+            name=ht.name,
+            description=ht.description,
+            isactive=ht.isactive,
+            created_by=str(ht.created_by) if ht.created_by else None,
+            created_date=ht.created_date,
+            updated_by=str(ht.updated_by) if ht.updated_by else None,
+            updated_date=ht.updated_date,
+        )
+        for ht in hotspot_types
+    ]
+
+    return api_success(HotspotTypesResponse(items=items).model_dump())
 
 
 @router.get("/products/{product_id}", response_model=dict)

@@ -213,6 +213,25 @@ class BackgroundTypesResponse(BaseModel):
     items: list[BackgroundTypeResponse]
 
 
+class HotspotTypeResponse(BaseModel):
+    """Hotspot type response model."""
+
+    id: int
+    name: str
+    description: Optional[str] = None
+    isactive: bool
+    created_by: Optional[str] = None
+    created_date: datetime
+    updated_by: Optional[str] = None
+    updated_date: Optional[datetime] = None
+
+
+class HotspotTypesResponse(BaseModel):
+    """Response containing list of hotspot types."""
+
+    items: list[HotspotTypeResponse]
+
+
 class BackgroundResponse(BaseModel):
     """Background response model."""
 
