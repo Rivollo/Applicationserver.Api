@@ -25,6 +25,7 @@ from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.types import TIMESTAMP
+from geoalchemy2 import Geometry, WKTElement
 
 from app.models.base import Base
 
@@ -364,6 +365,17 @@ class Configurator(UUIDMixin, AuditMixin, Base):
     product: Mapped[Product] = relationship("Product", back_populates="configurator")
 
 
+class HotspotType(AuditMixin, Base):
+    __tablename__ = "tbl_hotspot_type"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+    hotspots: Mapped[list["Hotspot"]] = relationship("Hotspot", back_populates="hotspot_type")
+
+
 class Hotspot(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
     """Hotspot - has BOTH created_at AND audit fields"""
     __tablename__ = "tbl_hotspots"
@@ -379,9 +391,14 @@ class Hotspot(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
     )
     label: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    # Legacy columns for backward compatibility (kept for migration period)
     pos_x: Mapped[float] = mapped_column(nullable=False)
     pos_y: Mapped[float] = mapped_column(nullable=False)
     pos_z: Mapped[float] = mapped_column(nullable=False)
+    # PostGIS geometry column for 3D position (PointZ)
+    position_3d: Mapped[Optional[Any]] = mapped_column(
+        Geometry("POINTZ", srid=0, spatial_index=True), nullable=True
+    )
     text_font: Mapped[Optional[str]] = mapped_column(String)
     text_color: Mapped[Optional[str]] = mapped_column(String)
     bg_color: Mapped[Optional[str]] = mapped_column(String)
@@ -393,12 +410,39 @@ class Hotspot(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
     # action_payload is TEXT in database, storing JSON as string
     action_payload: Mapped[Optional[str]] = mapped_column(Text)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    hotspot_type_id: Mapped[Optional[int]] = mapped_column(
+        "hotspot_type", Integer, ForeignKey("tbl_hotspot_type.id", ondelete="SET NULL")
+    )
 
     # Property for backward compatibility
     @property
     def updated_at(self) -> Optional[datetime]:
         return self.updated_date
 
+    def get_position_from_geometry(self) -> tuple[float, float, float]:
+        """Extract x, y, z coordinates from PostGIS geometry."""
+        if self.position_3d is not None:
+            try:
+                # Try to extract coordinates from PostGIS geometry
+                # This will be handled by SQL queries using ST_X, ST_Y, ST_Z
+                # For now, fallback to legacy columns
+                return (self.pos_x, self.pos_y, self.pos_z)
+            except Exception:
+                return (self.pos_x, self.pos_y, self.pos_z)
+        return (self.pos_x, self.pos_y, self.pos_z)
+
+    def set_position_to_geometry(self, x: float, y: float, z: float) -> None:
+        """Set PostGIS geometry from x, y, z coordinates."""
+        # Create a PostGIS PointZ geometry using WKT
+        # Format: POINTZ(x y z)
+        wkt = f"POINTZ({x} {y} {z})"
+        self.position_3d = WKTElement(wkt, srid=0)
+        # Also update legacy columns for backward compatibility
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+
+    hotspot_type: Mapped[Optional[HotspotType]] = relationship("HotspotType", back_populates="hotspots")
     product: Mapped[Product] = relationship("Product", back_populates="hotspots")
 
 

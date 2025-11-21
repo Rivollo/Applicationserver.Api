@@ -40,7 +40,9 @@ from app.schemas.products import (
     CurrencyTypeResponse,
     CurrencyTypesResponse,
     ProductAssetsData,
+    ProductAssetsHotspot,
     ProductAssetsResponse,
+    HotspotPosition,
     ProductCreate,
     ProductDetailsUpdate,
     ProductImageItem,
@@ -652,6 +654,27 @@ async def _build_product_assets_response(product_id: str, db: DB) -> dict:
         logger.error(f"Error fetching product links: {str(e)}\n{traceback.format_exc()}")
         links_data = None
 
+    # Fetch hotspots
+    hotspot_stmt = (
+        select(Hotspot)
+        .where(Hotspot.product_id == product_uuid)
+        .order_by(Hotspot.order_index)
+    )
+    hotspot_result = await db.execute(hotspot_stmt)
+    hotspot_rows = hotspot_result.scalars().all()
+
+    hotspots = [
+        ProductAssetsHotspot(
+            id=str(h.id),
+            title=h.label,
+            description=h.description,
+            position=HotspotPosition(x=h.pos_x, y=h.pos_y, z=h.pos_z),
+            hotspot_type=h.hotspot_type_id,
+            order_index=h.order_index,
+        ).model_dump()
+        for h in hotspot_rows
+    ]
+
     # Build response
     data = ProductAssetsData(
         id=str(product.id),
@@ -666,6 +689,7 @@ async def _build_product_assets_response(product_id: str, db: DB) -> dict:
         images=images,
         background=background_data,
         links=links_data,
+        hotspots=hotspots,
     )
 
     return ProductAssetsResponse(data=data).model_dump()

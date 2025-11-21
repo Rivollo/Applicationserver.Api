@@ -33,7 +33,8 @@ dependencies = [
 	"opentelemetry-instrumentation-logging>=0.58b0,<0.59",
 	"azure-storage-blob>=12.19,<13",
 	"gunicorn>=21.2,<22",
-	"orjson>=3.10,<4"
+	"orjson>=3.10,<4",
+	"geoalchemy2>=0.14,<0.15"
 ]
 
 [project.optional-dependencies]
