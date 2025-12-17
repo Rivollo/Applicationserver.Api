@@ -2,6 +2,7 @@
 
 import io
 import logging
+import os
 import secrets
 import uuid
 from datetime import datetime
@@ -11,11 +12,11 @@ import asyncio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
-from sqlalchemy import and_, desc, func, or_, select, cast, String, insert, update
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import and_, delete, desc, func, or_, select, cast, String, insert, update, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
-from app.api.deps import CurrentUser, DB, get_current_user
+from app.api.deps import CurrentUser, DB, get_current_user, get_db
 from app.core.config import settings
 from app.models.models import (
     AssetStatic,
@@ -28,6 +29,8 @@ from app.models.models import (
     Product,
     ProductAsset,
     ProductAssetMapping,
+    ProductDimensionGroup,
+    ProductDimensions,
     ProductLink,
     ProductStatus,
     PublishLink,
@@ -40,6 +43,8 @@ from app.schemas.products import (
     ConfiguratorSettings,
     CurrencyTypeResponse,
     CurrencyTypesResponse,
+    DimensionData,
+    DimensionsRequest,
     HotspotPosition,
     HotspotTypeResponse,
     HotspotTypesResponse,
@@ -63,14 +68,14 @@ from app.schemas.products import (
     PublishProductResponse,
 )
 from app.services.activity_service import ActivityService
+from app.services.background_removal_service import background_removal_service
 from app.services.licensing_service import LicensingService
 from app.services.product_service import product_service
-from app.services.storage import storage_service
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["products"], dependencies=[Depends(get_current_user)])
+public_noauth_router = APIRouter(tags=["products"])
 basic_auth_scheme = HTTPBasic()
-
 
 def verify_public_basic_auth(credentials: HTTPBasicCredentials = Depends(basic_auth_scheme)) -> None:
     """Verify HTTP Basic auth credentials for public endpoints."""
@@ -403,6 +408,17 @@ async def create_product_with_image(
     return api_success(response_dict)
 
 
+@public_noauth_router.post("/remove-background", response_model=dict, status_code=status.HTTP_201_CREATED)
+async def remove_background(
+    db: AsyncSession = Depends(get_db),
+    file: UploadFile = File(...),
+    product_id: str = Form(...),
+):
+    """Upload an image, remove its background, store blob + DB rows, and return URLs. No auth required."""
+    result = await background_removal_service.process(db=db, file=file, product_id=product_id)
+    return api_success(result)
+
+
 @router.get("/products/hotspottypes", response_model=dict)
 async def get_hotspot_types(db: DB):
     """Get all hotspot types."""
@@ -426,6 +442,200 @@ async def get_hotspot_types(db: DB):
     ]
 
     return api_success(HotspotTypesResponse(items=items).model_dump())
+
+
+@router.post("/products/{product_id}/dimensions", response_model=dict)
+async def save_product_dimensions(
+    product_id: str,
+    payload: DimensionsRequest,
+    current_user: CurrentUser,
+    request: Request,
+    db: DB,
+):
+    """Save or update product dimensions with associated hotspots."""
+    try:
+        prod_uuid = uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid productId format. Expected UUID string.",
+        )
+
+    try:
+        product = await db.get(Product, prod_uuid)
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found.",
+            )
+
+        # Delete existing dimension groups for this product (replace all)
+        await db.execute(delete(ProductDimensionGroup).where(ProductDimensionGroup.product_id == prod_uuid))
+        await db.flush()
+        
+        # Delete existing dimensions for this product (replace all)
+        await db.execute(delete(ProductDimensions).where(ProductDimensions.product_id == prod_uuid))
+        await db.flush()
+        
+        # Delete existing dimension-related hotspots (those with "Dimension marker" in description)
+        await db.execute(
+            delete(Hotspot).where(
+                Hotspot.product_id == prod_uuid,
+                Hotspot.description.like("Dimension marker:%")
+            )
+        )
+        await db.flush()
+        
+        # Get the maximum order_index for this product to assign unique values
+        max_order_result = await db.execute(
+            select(func.max(Hotspot.order_index)).where(Hotspot.product_id == prod_uuid)
+        )
+        max_order = max_order_result.scalar() or -1
+        next_order_index = max_order + 1
+
+        # Helper function to find or create hotspot
+        async def get_or_create_hotspot(hotspot_id: str, title: str, position: dict, product_id: uuid.UUID, order_idx: int) -> uuid.UUID:
+            """Find existing hotspot by ID or create new one."""
+            try:
+                hotspot_uuid = uuid.UUID(hotspot_id)
+                existing_hotspot = await db.get(Hotspot, hotspot_uuid)
+                if existing_hotspot and existing_hotspot.product_id == product_id:
+                    # Update existing hotspot position
+                    existing_hotspot.pos_x = position["x"]
+                    existing_hotspot.pos_y = position["y"]
+                    existing_hotspot.pos_z = position["z"]
+                    existing_hotspot.label = title
+                    existing_hotspot.set_position_to_geometry(position["x"], position["y"], position["z"])
+                    existing_hotspot.updated_by = current_user.id
+                    return existing_hotspot.id
+            except ValueError:
+                pass
+            
+            # Create new hotspot with unique order_index
+            new_hotspot = Hotspot(
+                product_id=product_id,
+                label=title,
+                description=f"Dimension marker: {title}",
+                pos_x=position["x"],
+                pos_y=position["y"],
+                pos_z=position["z"],
+                order_index=order_idx,
+                created_by=current_user.id,
+            )
+            new_hotspot.set_position_to_geometry(position["x"], position["y"], position["z"])
+            db.add(new_hotspot)
+            await db.flush()
+            return new_hotspot.id
+
+        # Helper function to process a single dimension
+        async def process_dimension(dimension_type: str, dim_data: Optional[DimensionData], start_order_idx: int, dimension_group_id: Optional[uuid.UUID] = None) -> int:
+            """Process a single dimension of a specific type. Returns next available order_index."""
+            if not dim_data:
+                return start_order_idx
+            
+            if len(dim_data.hotspots) < 2:
+                return start_order_idx  # Skip if not enough hotspots
+            
+            start_hotspot_id = await get_or_create_hotspot(
+                dim_data.hotspots[0].id,
+                dim_data.hotspots[0].title,
+                dim_data.hotspots[0].position.model_dump(),
+                prod_uuid,
+                start_order_idx
+            )
+            end_hotspot_id = await get_or_create_hotspot(
+                dim_data.hotspots[1].id,
+                dim_data.hotspots[1].title,
+                dim_data.hotspots[1].position.model_dump(),
+                prod_uuid,
+                start_order_idx + 1
+            )
+            
+            dimension = ProductDimensions(
+                product_id=prod_uuid,
+                dimension_group_id=dimension_group_id,  # Link to dimension group
+                dimension_type=dimension_type,
+                value=dim_data.value,
+                unit=dim_data.unit or "cm",
+                start_hotspot_id=start_hotspot_id,
+                end_hotspot_id=end_hotspot_id,
+                order_index=dim_data.order_index if hasattr(dim_data, 'order_index') else 0,
+                created_by=current_user.id,
+            )
+            db.add(dimension)
+            
+            # Return next available order_index (2 hotspots used, so increment by 2)
+            return start_order_idx + 2
+
+        # Extract dimensions from payload - handle the nested structure
+        # Payload structure: {"model": {"dimensions": {"dimension_name": "...", "width": ..., "height": ..., "depth": ...}}}
+        model_data = payload.model if isinstance(payload.model, dict) else payload.model.model_dump() if hasattr(payload.model, 'model_dump') else {}
+        dimensions_data = model_data.get("dimensions", {})
+        
+        # Extract dimension_name (single name for all dimensions - this becomes the group name)
+        dimension_name = dimensions_data.get("dimension_name") or "Product Measurements"
+        
+        # Create dimension group
+        dimension_group = ProductDimensionGroup(
+            product_id=prod_uuid,
+            name=dimension_name,
+            description=None,
+            order_index=0,
+            created_by=current_user.id,
+        )
+        db.add(dimension_group)
+        await db.flush()  # Flush to get the group ID
+        
+        # Process all dimension types
+        width_data = dimensions_data.get("width")
+        height_data = dimensions_data.get("height")
+        depth_data = dimensions_data.get("depth")
+        
+        # Convert dict to DimensionData if present
+        width_dim = DimensionData(**width_data) if width_data else None
+        height_dim = DimensionData(**height_data) if height_data else None
+        depth_dim = DimensionData(**depth_data) if depth_data else None
+        
+        # Process all dimension types with unique order_index values, linked to the group
+        current_order = next_order_index
+        current_order = await process_dimension("width", width_dim, current_order, dimension_group.id)
+        current_order = await process_dimension("height", height_dim, current_order, dimension_group.id)
+        current_order = await process_dimension("depth", depth_dim, current_order, dimension_group.id)
+
+        await db.flush()
+
+        # Log activity
+        await ActivityService.log_product_action(
+            db=db,
+            action="product.dimensions_updated",
+            user_id=current_user.id,
+            product_id=product.id,
+            request=request,
+        )
+
+        await db.commit()
+
+        return api_success({
+            "product_id": str(product.id),
+            "message": "Product dimensions updated successfully",
+            "dimensions": model_data
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger = logging.getLogger(__name__)
+        error_msg = f"Error saving product dimensions: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save product dimensions: {str(e)}",
+        )
 
 
 @router.get("/products/{product_id}", response_model=dict)
@@ -703,6 +913,74 @@ async def _build_product_assets_response(product_id: str, db: DB) -> dict:
         for h in hotspot_rows
     ]
 
+    # Fetch dimension groups and their dimensions
+    groups_result = await db.execute(
+        select(ProductDimensionGroup)
+        .where(ProductDimensionGroup.product_id == product_uuid)
+        .order_by(ProductDimensionGroup.order_index)
+    )
+    groups_list = groups_result.scalars().all()
+
+    model_data = None
+    if groups_list:
+        # For now, take the first group (we can extend to support multiple groups later)
+        group = groups_list[0]
+        
+        # Fetch dimensions for this group
+        dimensions_result = await db.execute(
+            select(ProductDimensions)
+            .where(ProductDimensions.dimension_group_id == group.id)
+            .order_by(ProductDimensions.dimension_type, ProductDimensions.order_index)
+        )
+        dimensions_list = dimensions_result.scalars().all()
+
+        if dimensions_list:
+            dimensions_dict = {}
+            
+            # Group dimensions by type and take the first one of each type
+            seen_types = set()
+            for dim in dimensions_list:
+                dim_type = dim.dimension_type.lower()  # width, height, depth, etc.
+                
+                # Only take the first dimension of each type (lowest order_index)
+                if dim_type in seen_types:
+                    continue
+                seen_types.add(dim_type)
+                
+                # Build hotspots for this dimension
+                dim_hotspots = []
+                if dim.start_hotspot_id:
+                    start_hotspot = await db.get(Hotspot, dim.start_hotspot_id)
+                    if start_hotspot:
+                        dim_hotspots.append({
+                            "id": str(start_hotspot.id),
+                            "title": start_hotspot.label,
+                            "position": {"x": start_hotspot.pos_x, "y": start_hotspot.pos_y, "z": start_hotspot.pos_z}
+                        })
+                if dim.end_hotspot_id:
+                    end_hotspot = await db.get(Hotspot, dim.end_hotspot_id)
+                    if end_hotspot:
+                        dim_hotspots.append({
+                            "id": str(end_hotspot.id),
+                            "title": end_hotspot.label,
+                            "position": {"x": end_hotspot.pos_x, "y": end_hotspot.pos_y, "z": end_hotspot.pos_z}
+                        })
+                
+                # Create dimension data as a single object (not array)
+                dim_data = {
+                    "value": float(dim.value),
+                    "unit": dim.unit or "cm",
+                    "hotspots": dim_hotspots
+                }
+                
+                # Store as single object, not array
+                dimensions_dict[dim_type] = dim_data
+            
+            if dimensions_dict:
+                # Add dimension_name (group name) at the top level of dimensions
+                dimensions_dict["dimension_name"] = group.name
+                model_data = {"dimensions": dimensions_dict}
+
     # Build response
     data = ProductAssetsData(
         id=str(product.id),
@@ -718,6 +996,7 @@ async def _build_product_assets_response(product_id: str, db: DB) -> dict:
         background=background_data,
         links=links_data,
         hotspots=hotspots,
+        model=model_data,
     )
 
     return ProductAssetsResponse(data=data).model_dump()
