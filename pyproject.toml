@@ -34,7 +34,9 @@ dependencies = [
 	"azure-storage-blob>=12.19,<13",
 	"gunicorn>=21.2,<22",
 	"orjson>=3.10,<4",
-	"geoalchemy2>=0.14,<0.15"
+	"geoalchemy2>=0.14,<0.15",
+	"rembg>=2.0,<3",
+	"pillow>=10.0,<11"
 ]
 
 [project.optional-dependencies]
