@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     PrimaryKeyConstraint,
     String,
     Text,
@@ -342,6 +343,12 @@ class Product(UUIDMixin, TimestampMixin, Base):
     hotspots: Mapped[list["Hotspot"]] = relationship(
         "Hotspot", back_populates="product", cascade="all, delete-orphan"
     )
+    dimensions: Mapped[list["ProductDimensions"]] = relationship(
+        "ProductDimensions", back_populates="product", cascade="all, delete-orphan"
+    )
+    dimension_groups: Mapped[list["ProductDimensionGroup"]] = relationship(
+        "ProductDimensionGroup", back_populates="product", cascade="all, delete-orphan"
+    )
     publish_links: Mapped[list["PublishLink"]] = relationship(
         "PublishLink", back_populates="product", cascade="all, delete-orphan"
     )
@@ -444,6 +451,78 @@ class Hotspot(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
 
     hotspot_type: Mapped[Optional[HotspotType]] = relationship("HotspotType", back_populates="hotspots")
     product: Mapped[Product] = relationship("Product", back_populates="hotspots")
+
+
+class ProductDimensionGroup(AuditMixin, Base):
+    """Dimension group - a collection of dimension parameters."""
+    __tablename__ = "tbl_product_dimension_groups"
+    __table_args__ = (
+        Index("ix_dimension_groups_product_order", "product_id", "order_index"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
+    )
+
+    name: Mapped[str] = mapped_column(Text, nullable=False)  # Name of the dimension group
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    # Relationships
+    product: Mapped["Product"] = relationship("Product", back_populates="dimension_groups")
+    dimensions: Mapped[list["ProductDimensions"]] = relationship(
+        "ProductDimensions", back_populates="dimension_group", cascade="all, delete-orphan"
+    )
+
+
+class ProductDimensions(AuditMixin, Base):
+    """Product dimensions - allows multiple dimensions per product."""
+    __tablename__ = "tbl_product_dimensions"
+    __table_args__ = (
+        Index("ix_product_dimensions_product_type", "product_id", "dimension_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_products.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Dimension identification
+    dimension_type: Mapped[str] = mapped_column(String, nullable=False)  # 'width', 'height', 'depth', etc.
+    dimension_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Optional display name
+
+    # Dimension values
+    value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    unit: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'cm'"))
+
+    # Associated hotspots
+    start_hotspot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_hotspots.id", ondelete="SET NULL"), nullable=True
+    )
+    end_hotspot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_hotspots.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Ordering for multiple dimensions of the same type
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    
+    # Link to dimension group
+    dimension_group_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tbl_product_dimension_groups.id", ondelete="CASCADE"), nullable=True
+    )
+
+    # Relationships
+    product: Mapped["Product"] = relationship("Product", back_populates="dimensions")
+    dimension_group: Mapped[Optional["ProductDimensionGroup"]] = relationship(
+        "ProductDimensionGroup", back_populates="dimensions"
+    )
+    start_hotspot: Mapped[Optional["Hotspot"]] = relationship(
+        "Hotspot", foreign_keys=[start_hotspot_id], post_update=True
+    )
+    end_hotspot: Mapped[Optional["Hotspot"]] = relationship(
+        "Hotspot", foreign_keys=[end_hotspot_id], post_update=True
+    )
 
 
 class Job(UUIDMixin, AuditMixin, Base):

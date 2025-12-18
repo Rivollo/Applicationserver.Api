@@ -126,6 +126,7 @@ class ProductAssetsData(BaseModel):
     background: Optional[dict] = None  # Background data with type
     links: Optional[list[dict]] = None  # Product links
     hotspots: list["ProductAssetsHotspot"] = Field(default_factory=list)
+    model: Optional[dict] = None  # Model data including dimensions
 
 
 class ProductAssetsResponse(BaseModel):
@@ -330,3 +331,50 @@ class HotspotResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# === Dimension Schemas ===
+
+
+class DimensionPosition(BaseModel):
+    """3D position for dimension hotspot (no range restriction)."""
+
+    x: float
+    y: float
+    z: float
+
+
+class DimensionHotspot(BaseModel):
+    """Hotspot reference for dimension measurement."""
+
+    id: str
+    title: str
+    position: DimensionPosition
+
+
+class DimensionData(BaseModel):
+    """Single dimension data with hotspots."""
+
+    value: float
+    unit: str
+    hotspots: list[DimensionHotspot]
+    order_index: int = 0  # For multiple dimensions of the same type
+
+
+class ProductDimensionsData(BaseModel):
+    """Product dimensions grouped by type."""
+
+    dimension_name: Optional[str] = None  # Single name for all dimensions
+    width: Optional[DimensionData] = None  # Width dimension
+    height: Optional[DimensionData] = None  # Height dimension
+    depth: Optional[DimensionData] = None  # Depth dimension
+    # Can add more dimension types as needed (e.g., diameter, radius, etc.)
+
+
+class DimensionsRequest(BaseModel):
+    """Request model for storing dimensions."""
+
+    model: dict  # Accepts {"dimensions": {"width": ..., "height": ..., "depth": ...}}
+    
+    class Config:
+        extra = "allow"  # Allow extra fields like "dimensions" inside "model"
