@@ -914,3 +914,18 @@ class ProductLink(AuditMixin, Base):
     link: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+
+class Support(AuditMixin, Base):
+    """Support contact table (tbl_support)."""
+    __tablename__ = "tbl_support"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fullname: Mapped[str] = mapped_column(Text, nullable=False)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+    # Property for backward compatibility
+    @property
+    def created_at(self) -> datetime:
+        return self.created_date
