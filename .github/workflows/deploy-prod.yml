@@ -2,8 +2,8 @@ name: CI/CD - Docker to Azure Web App (Production)
 
 on:
   push:
-    branches: [main, master, production]
-  workflow_dispatch:
+    branches:
+      - main
 
 env:
   AZURE_WEBAPP_NAME: rivollo-prod-portal-api
@@ -11,12 +11,8 @@ env:
   IMAGE_NAME: rivollo-prod-portal-api
 
 jobs:
-  build:
+  build-and-deploy-container:
     runs-on: ubuntu-latest
-
-    outputs:
-      image_num: ${{ steps.meta.outputs.image_num }}
-      tag_num: ${{ steps.meta.outputs.tag_num }}
 
     steps:
       - name: Checkout
@@ -32,26 +28,25 @@ jobs:
           username: ${{ secrets.PROD_ACR_USERNAME }}
           password: ${{ secrets.PROD_ACR_PASSWORD }}
 
-      - name: Compute image tags (numeric + latest)
-        id: meta
+      - name: Set tags
+        id: tags
         run: |
+          # runtime tags
           TAG_NUM="build-${GITHUB_RUN_NUMBER}"
-          IMAGE_NUM="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_NUM}"
-          IMAGE_LATEST="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
+          TAG_LATEST="latest"
 
-          echo "tag_num=${TAG_NUM}" >> $GITHUB_OUTPUT
-          echo "image_num=${IMAGE_NUM}" >> $GITHUB_OUTPUT
-          echo "image_latest=${IMAGE_LATEST}" >> $GITHUB_OUTPUT
-
+          # export for later steps
           echo "TAG_NUM=${TAG_NUM}" >> $GITHUB_ENV
-          echo "IMAGE_NUM=${IMAGE_NUM}" >> $GITHUB_ENV
-          echo "IMAGE_LATEST=${IMAGE_LATEST}" >> $GITHUB_ENV
+          echo "TAG_LATEST=${TAG_LATEST}" >> $GITHUB_ENV
+
+          # full image names (runtime env variables)
+          echo "IMAGE_NUM=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_NUM}" >> $GITHUB_ENV
+          echo "IMAGE_LATEST=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_LATEST}" >> $GITHUB_ENV
 
           echo "Using numeric tag: ${TAG_NUM}"
-          echo "IMAGE_NUM: ${IMAGE_NUM}"
-          echo "IMAGE_LATEST: ${IMAGE_LATEST}"
+          echo "IMAGE_NUM set to: ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG_NUM}"
 
-      - name: Build and push (numeric + latest)
+      - name: Build and push (both numeric and latest)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -63,49 +58,21 @@ jobs:
       - name: Print pushed image digests (traceability)
         run: |
           echo "GIT_COMMIT=${GITHUB_SHA}"
+          echo "Pulling numeric tag: ${{ env.IMAGE_NUM }}"
+          docker pull "${{ env.IMAGE_NUM }}"
+          echo "Numeric image repo digests:"
+          docker inspect --format='{{index .RepoDigests 0}}' "${{ env.IMAGE_NUM }}" || true
 
-          echo "Pulling numeric tag: ${IMAGE_NUM}"
-          docker pull "${IMAGE_NUM}"
-          echo "Numeric image repo digest:"
-          docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_NUM}" || true
+          echo "Pulling latest: ${{ env.IMAGE_LATEST }}"
+          docker pull "${{ env.IMAGE_LATEST }}"
+          echo "Latest image repo digests:"
+          docker inspect --format='{{index .RepoDigests 0}}' "${{ env.IMAGE_LATEST }}" || true
 
-          echo "Pulling latest: ${IMAGE_LATEST}"
-          docker pull "${IMAGE_LATEST}"
-          echo "Latest image repo digest:"
-          docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_LATEST}" || true
-
-      - name: Build summary
-        run: |
-          {
-            echo "Build Completed"
-            echo ""
-            echo "Commit: ${GITHUB_SHA}"
-            echo "Numeric tag: ${TAG_NUM}"
-            echo "Image: ${IMAGE_NUM}"
-            echo "Latest: ${IMAGE_LATEST}"
-          } >> $GITHUB_STEP_SUMMARY
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-
-    environment:
-      name: prod
-      url: https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net
-
-    steps:
+     
       - name: Deploy numeric-tagged image to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.PROD_AZURE_WEBAPP_PUBLISH_PROFILE }}
-          images: ${{ needs.build.outputs.image_num }}
-
-      - name: Deploy summary
-        run: |
-          {
-            echo "Deployment Completed"
-            echo ""
-            echo "Deployed image: ${{ needs.build.outputs.image_num }}"
-            echo "App URL: https://${AZURE_WEBAPP_NAME}.azurewebsites.net"
-          } >> $GITHUB_STEP_SUMMARY
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          images: ${{ env.IMAGE_NUM }}
+          
