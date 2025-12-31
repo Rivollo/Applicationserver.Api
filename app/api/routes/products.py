@@ -74,7 +74,7 @@ from app.services.product_service import product_service
 from app.utils.envelopes import api_success
 
 
-router = APIRouter(tags=["products"])
+router = APIRouter(tags=["products"], dependencies=[Depends(get_current_user)])
 public_noauth_router = APIRouter(tags=["products"])
 basic_auth_scheme = HTTPBasic()
 
