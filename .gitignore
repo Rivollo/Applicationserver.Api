@@ -218,3 +218,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Personal study notes
+DATABASE_CONNECTION_GUIDE.md
+SUBSCRIPTION_API_FLOW_DIAGRAM.md
+SUBSCRIPTION_API_STUDY_GUIDE.md
+SUBSCRIPTION_MODELS_REFACTOR.md
+SUBSCRIPTION_MODELS_SPLIT.md
+
+# Local DB
+dev.db
