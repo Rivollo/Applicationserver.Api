@@ -75,17 +75,6 @@ class OrgRole(str, enum.Enum):
     MEMBER = "member"
 
 
-class SubscriptionStatus(str, enum.Enum):
-    TRIALING = "trialing"
-    ACTIVE = "active"
-    CANCELED = "canceled"
-    PAST_DUE = "past_due"
-
-
-class LicenseStatus(str, enum.Enum):
-    INVITED = "invited"
-    ACTIVE = "active"
-    REVOKED = "revoked"
 
 
 class AssetType(str, enum.Enum):
@@ -196,89 +185,6 @@ class OrgMember(AuditMixin, Base):
     user: Mapped[User] = relationship("User")
 
 
-class Plan(UUIDMixin, AuditMixin, Base):
-    __tablename__ = "tbl_mstr_plans"
-
-    code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    # quotas is TEXT in database, storing JSON as string
-    quotas: Mapped[Optional[str]] = mapped_column(Text)
-
-    # Property for backward compatibility
-    @property
-    def created_at(self) -> datetime:
-        return self.created_date
-
-    subscriptions: Mapped[list["Subscription"]] = relationship("Subscription", back_populates="plan")
-
-
-class Subscription(UUIDMixin, Base):
-    __tablename__ = "tbl_subscriptions"
-    __table_args__ = (Index("ix_subscriptions_user", "user_id"),)
-
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
-    )
-    plan_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_mstr_plans.id"), nullable=False
-    )
-    status: Mapped[SubscriptionStatus] = mapped_column(
-        Enum(SubscriptionStatus, name="subscription_status", native_enum=False), nullable=False
-    )
-    seats_purchased: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
-    # billing column is TEXT in database, but we treat it as JSONB in Python
-    billing: Mapped[Optional[str]] = mapped_column(Text)
-
-    # These columns exist in the database as nullable timestamps
-    current_period_start: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-    current_period_end: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-
-    # Audit fields that exist in the database
-    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True))
-    created_date: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(PGUUID(as_uuid=True))
-    updated_date: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-
-    # Virtual columns - these don't exist in the actual database table
-    # Keeping as properties for backward compatibility with code that references them
-    trial_end_at = column_property(literal_column("NULL::timestamptz"))
-    renews_at = column_property(literal_column("NULL::timestamptz"))
-
-    user: Mapped[User] = relationship("User", back_populates="subscriptions")
-    plan: Mapped[Plan] = relationship("Plan", back_populates="subscriptions")
-    licenses: Mapped[list["LicenseAssignment"]] = relationship("LicenseAssignment", back_populates="subscription")
-
-
-class LicenseAssignment(UUIDMixin, CreatedAtMixin, AuditMixin, Base):
-    """LicenseAssignment - has BOTH created_at AND audit fields"""
-    __tablename__ = "tbl_license_assignments"
-    __table_args__ = (
-        UniqueConstraint("subscription_id", "user_id", name="uq_license_subscription_user"),
-        Index("ix_license_user", "user_id"),
-    )
-
-    subscription_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_subscriptions.id", ondelete="CASCADE"), nullable=False
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tbl_users.id", ondelete="CASCADE"), nullable=False
-    )
-    status: Mapped[LicenseStatus] = mapped_column(
-        Enum(LicenseStatus, name="license_status", native_enum=False), nullable=False, server_default=text("'active'"),
-    )
-    # limits and usage_counters are TEXT in database, storing JSON as string
-    limits: Mapped[Optional[str]] = mapped_column(Text)
-    usage_counters: Mapped[Optional[str]] = mapped_column(Text)
-
-    # Property for backward compatibility
-    @property
-    def updated_at(self) -> Optional[datetime]:
-        return self.updated_date
-
-    subscription: Mapped[Subscription] = relationship("Subscription", back_populates="licenses")
-    user: Mapped[User] = relationship("User", back_populates="licenses")
 
 
 class Asset(UUIDMixin, AuditMixin, Base):
@@ -916,6 +822,15 @@ class ProductLink(AuditMixin, Base):
     isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
 
+# ============================================================================
+# Subscription-related models and enums
+# ============================================================================
+# These are defined in separate files but imported here for backward
+# compatibility. All existing imports from app.models.models will continue to work.
+from app.models.license_assignment import LicenseAssignment
+from app.models.plan import Plan
+from app.models.subscription import Subscription
+from app.models.subscription_enums import LicenseStatus, SubscriptionStatus
 class Support(AuditMixin, Base):
     """Support contact table (tbl_support)."""
     __tablename__ = "tbl_support"

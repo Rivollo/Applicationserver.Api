@@ -1,23 +1,20 @@
-"""Subscription and plan management routes."""
+"""Subscription and plan management routes.
 
-import json
-from datetime import datetime, timedelta
-from typing import Optional
+This module contains ONLY route handlers - thin orchestration layer.
+All business logic is in SubscriptionService.
+All database access is in SubscriptionRepository.
+
+Architecture:
+- Route: Handles HTTP requests/responses, calls service
+- Service: Contains business logic, orchestrates repository calls
+- Repository: Contains database queries only
+"""
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DB, OptionalUser
-from app.models.models import LicenseAssignment, Plan, Product, Subscription
-from app.schemas.subscriptions import (
-    PlanFeature,
-    Plan as PlanSchema,
-    QuotaInfo,
-    QuotaUsage,
-    SubscriptionMe,
-    TrialInfo,
-)
-from app.services.licensing_service import LicensingService
+from app.schemas.subscriptions import Plan as PlanSchema, PlanFeature
+from app.services.subscription_service import SubscriptionService
 from app.utils.envelopes import api_success
 
 router = APIRouter(tags=["subscriptions"])
@@ -28,110 +25,21 @@ async def get_my_subscription(
     current_user: CurrentUser,
     db: DB,
 ):
-    """Get current user's subscription and quota information."""
-    # Get active license
-    license_assignment = await LicensingService.get_active_license(db, current_user.id)
+    """
+    Get current user's subscription and quota information.
 
-    if not license_assignment:
-        # Return default free plan info
-        return api_success(
-            SubscriptionMe(
-                plan="free",
-                trial=TrialInfo(active=False, daysRemaining=0, startedAt=None),
-                quotas={
-                    "aiCredits": QuotaUsage(included=5, purchased=0, used=0).model_dump(),
-                    "publicViews": QuotaUsage(included=1000, purchased=0, used=0).model_dump(),
-                    "products": QuotaInfo(used=0, limit=2).model_dump(),
-                    "galleries": QuotaInfo(used=0, limit=0).model_dump(),
-                },
-            ).model_dump()
-        )
+    This endpoint returns:
+    - Current plan (free, pro, enterprise)
+    - Trial status (if applicable)
+    - Quota usage for all resources (AI credits, views, products, galleries)
 
-    # Get subscription and plan
-    result = await db.execute(
-        select(Subscription, Plan)
-        .join(Plan, Subscription.plan_id == Plan.id)
-        .where(Subscription.id == license_assignment.subscription_id)
-    )
-    row = result.first()
+    Returns free plan defaults if user has no active subscription.
+    """
+    # Delegate all logic to service layer
+    subscription_data = await SubscriptionService.get_user_subscription(db, current_user.id)
 
-    if not row:
-        return api_success(
-            SubscriptionMe(
-                plan="free",
-                trial=TrialInfo(active=False, daysRemaining=0, startedAt=None),
-                quotas={},
-            ).model_dump()
-        )
-
-    subscription, plan = row
-
-    # Check if trial is active
-    trial_active = False
-    days_remaining = 0
-    trial_started = None
-
-    if subscription.trial_end_at:
-        now = datetime.utcnow()
-        if subscription.trial_end_at > now:
-            trial_active = True
-            days_remaining = max(0, (subscription.trial_end_at - now).days)
-            # Calculate trial start (7 days before end)
-            trial_started = subscription.trial_end_at - timedelta(days=7)
-
-    # Get usage counters
-    limits = getattr(license_assignment, "_limits_dict", None)
-    if limits is None:
-        limits = json.loads(license_assignment.limits) if license_assignment.limits else {}
-        license_assignment._limits_dict = limits  # cache for downstream calls
-
-    usage = getattr(license_assignment, "_usage_dict", None)
-    if usage is None:
-        usage = json.loads(license_assignment.usage_counters) if license_assignment.usage_counters else {}
-        license_assignment._usage_dict = usage
-
-    # Count products
-    result = await db.execute(
-        select(Product).where(
-            Product.created_by == current_user.id,
-            Product.deleted_at.is_(None),
-        )
-    )
-    product_count = len(result.scalars().all())
-
-    # Build quotas
-    quotas = {
-        "aiCredits": QuotaUsage(
-            included=limits.get("max_ai_credits_month", 5),
-            purchased=0,
-            used=usage.get("ai_credits", 0),
-        ).model_dump(),
-        "publicViews": QuotaUsage(
-            included=limits.get("max_public_views", 1000),
-            purchased=0,
-            used=usage.get("public_views", 0),
-        ).model_dump(),
-        "products": QuotaInfo(
-            used=product_count,
-            limit=limits.get("max_products"),
-        ).model_dump(),
-        "galleries": QuotaInfo(
-            used=usage.get("galleries", 0),
-            limit=limits.get("max_galleries"),
-        ).model_dump(),
-    }
-
-    response_data = SubscriptionMe(
-        plan=plan.code,
-        trial=TrialInfo(
-            active=trial_active,
-            daysRemaining=days_remaining,
-            startedAt=trial_started,
-        ),
-        quotas=quotas,
-    )
-
-    return api_success(response_data.model_dump())
+    # Return formatted response
+    return api_success(subscription_data.model_dump())
 
 
 @router.get("/subscriptions/plans", response_model=dict)
