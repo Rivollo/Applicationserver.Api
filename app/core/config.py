@@ -36,6 +36,7 @@ class Settings(BaseSettings):
 	# Public API basic auth
 	PUBLIC_API_USERNAME: str = Field(default="public")
 	PUBLIC_API_PASSWORD: str = Field(default="public-secret")
-
+	# Google OAuth
+	GOOGLE_CLIENT_ID: str = Field(default="") 
 
 settings = Settings()

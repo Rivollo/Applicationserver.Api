@@ -18,6 +18,7 @@ from app.schemas.auth import (
 from app.services.activity_service import ActivityService
 from app.services.auth_service import AuthService
 from app.utils.envelopes import api_success
+from app.core.config import settings
 
 router = APIRouter(tags=["auth"])
 
@@ -160,6 +161,13 @@ async def google_auth(
         )
 
     token_info = resp.json()
+    aud = token_info.get("aud")
+    if aud != settings.GOOGLE_CLIENT_ID:
+      raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Google token was not issued for this application",
+    )
+
     google_user_id = token_info.get("sub")
     email = token_info.get("email")
 
