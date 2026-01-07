@@ -22,6 +22,7 @@ from app.api.routes.analytics import router as analytics_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.search import router as search_router
 from app.api.routes.health import router as health_router
+from app.api.routes.hotspots import router as hotspots_router
 from app.utils.envelopes import api_success, api_error
 from app.core.db import init_engine_and_session
 
@@ -104,6 +105,7 @@ app.include_router(search_router, prefix=_api_prefix)
 app.include_router(uploads_router, prefix=_api_prefix)
 app.include_router(jobs_router, prefix=_api_prefix)
 app.include_router(assets_router, prefix=_api_prefix)
+app.include_router(hotspots_router, prefix=_api_prefix)
 
 
 # Structured request logging (includes trace correlation where available)
