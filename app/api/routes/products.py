@@ -73,6 +73,7 @@ from app.services.licensing_service import LicensingService
 from app.services.product_service import product_service
 from app.utils.envelopes import api_success
 
+
 router = APIRouter(tags=["products"], dependencies=[Depends(get_current_user)])
 public_noauth_router = APIRouter(tags=["products"])
 basic_auth_scheme = HTTPBasic()
@@ -294,6 +295,30 @@ async def create_product_with_image(
             detail="Invalid userId format. Expected UUID string.",
         )
 
+   # Check if user has enough quota
+    allowed, quota_info = await LicensingService.check_quota(db, user_uuid, "max_products")
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_200_OK,
+            detail=f"Product limit exceeded. Upgrade your plan to create more products.",
+        )
+
+    
+    # --- Check max products per user ---
+    #MAX_PRODUCTS_PER_USER = 2
+
+    # existing_count = await db.scalar(
+    #     text("SELECT COUNT(*) FROM tbl_products WHERE created_by = :user_id"),
+    #     {"user_id": str(user_uuid)}
+    # )
+
+    # if existing_count >= MAX_PRODUCTS_PER_USER:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_200_OK,
+    #         detail=f"Product limit of {MAX_PRODUCTS_PER_USER} reached. You cannot create more products.",
+    #     )
+
+
     # Validate file type
     if not image.filename:
         raise HTTPException(
@@ -342,6 +367,10 @@ async def create_product_with_image(
             image_content_type=content_type,
             image_size_bytes=image_size_bytes,
         )
+
+        # Increment usage
+        await LicensingService.increment_usage(db, user_uuid, "max_products")
+    
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
