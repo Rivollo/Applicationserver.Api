@@ -19,6 +19,7 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+# ---------- List all hotspot ----------
 
 @router.get("/products/{product_id}/hotspots", response_model=dict)
 async def list_product_hotspots(
@@ -38,6 +39,8 @@ async def list_product_hotspots(
     )
     return api_success([h.model_dump() for h in hotspots])
 
+
+# ---------- Create hotspot ----------
 
 @router.post(
     "/products/{product_id}/hotspots",
@@ -64,6 +67,8 @@ async def create_hotspot(
     return api_success(hotspot.model_dump())
 
 
+# ---------- Update hotspot ----------
+
 @router.patch("/hotspots/{hotspot_id}", response_model=dict)
 async def update_hotspot(
     hotspot_id: str,
@@ -84,6 +89,8 @@ async def update_hotspot(
     )
     return api_success(hotspot.model_dump())
 
+
+# ---------- Delete hotspot ----------
 
 @router.delete(
     "/hotspots/{hotspot_id}",

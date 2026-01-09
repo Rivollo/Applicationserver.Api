@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
+from typing import List, Optional
 
 
 # === Core Product Schemas ===
@@ -334,10 +335,8 @@ class HotspotResponse(BaseModel):
 
 
 # === Dimension Schemas ===
-
-
 class DimensionPosition(BaseModel):
-    """3D position for dimension hotspot (no range restriction)."""
+    """3D position for dimension hotspot"""
 
     x: float
     y: float
@@ -345,36 +344,17 @@ class DimensionPosition(BaseModel):
 
 
 class DimensionHotspot(BaseModel):
-    """Hotspot reference for dimension measurement."""
+    """Start / End hotspot for a dimension"""
 
-    id: str
+    type: str          # "start" | "end"
     title: str
     position: DimensionPosition
 
 
-class DimensionData(BaseModel):
-    """Single dimension data with hotspots."""
+class DimensionItem(BaseModel):
+    """Single dynamic dimension"""
 
+    name: str          # e.g. "Seat Width", "Back Height"
     value: float
-    unit: str
-    hotspots: list[DimensionHotspot]
-    order_index: int = 0  # For multiple dimensions of the same type
-
-
-class ProductDimensionsData(BaseModel):
-    """Product dimensions grouped by type."""
-
-    dimension_name: Optional[str] = None  # Single name for all dimensions
-    width: Optional[DimensionData] = None  # Width dimension
-    height: Optional[DimensionData] = None  # Height dimension
-    depth: Optional[DimensionData] = None  # Depth dimension
-    # Can add more dimension types as needed (e.g., diameter, radius, etc.)
-
-
-class DimensionsRequest(BaseModel):
-    """Request model for storing dimensions."""
-
-    model: dict  # Accepts {"dimensions": {"width": ..., "height": ..., "depth": ...}}
-    
-    class Config:
-        extra = "allow"  # Allow extra fields like "dimensions" inside "model"
+    unit: Optional[str] = "cm"
+    hotspots: List[DimensionHotspot]
