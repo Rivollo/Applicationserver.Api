@@ -395,7 +395,7 @@ class ProductDimensions(AuditMixin, Base):
     )
 
     # Dimension identification
-    dimension_type: Mapped[str] = mapped_column(String, nullable=False)  # 'width', 'height', 'depth', etc.
+    dimension_type: Mapped[str] = mapped_column(String, nullable=True)  # 'width', 'height', 'depth', etc.
     dimension_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Optional display name
 
     # Dimension values
