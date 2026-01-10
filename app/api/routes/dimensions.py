@@ -1,13 +1,4 @@
 """Dimension management routes.
-
-This module contains ONLY route handlers - thin orchestration layer.
-All business logic is in DimensionService.
-All database access is in DimensionRepository.
-
-Architecture:
-- Route: Handles HTTP requests/responses, calls service
-- Service: Contains business logic, orchestrates repository calls
-- Repository: Contains database queries only
 """
 
 import uuid
