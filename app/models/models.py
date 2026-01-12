@@ -808,6 +808,16 @@ class Background(AuditMixin, Base):
     image: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class ProductLinkType(AuditMixin, Base):
+    """Product link types table (tbl_product_link_type)."""
+    __tablename__ = "tbl_product_link_type"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+
 class ProductLink(AuditMixin, Base):
     """Product links table (tbl_product_links)."""
     __tablename__ = "tbl_product_links"
@@ -819,6 +829,9 @@ class ProductLink(AuditMixin, Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     link: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
+    link_type: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("tbl_product_link_type.id"), nullable=True
+    )
     isactive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
 

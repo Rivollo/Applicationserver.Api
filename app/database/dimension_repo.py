@@ -1,12 +1,5 @@
 """Repository layer for dimension-related database operations.
 
-This module contains ONLY database access logic - no business rules.
-Repository functions fetch data from the database and return raw models or primitive values.
-
-Architecture:
-- Route: Handles HTTP requests/responses, calls service
-- Service: Contains business logic, orchestrates repository calls
-- Repository: Contains database queries only
 """
 
 import uuid
@@ -32,14 +25,6 @@ class DimensionRepository:
         """
         Delete all existing dimension data for a product.
 
-        This includes:
-        - Dimension groups
-        - Dimensions
-        - Hotspots with dimension marker descriptions
-
-        Args:
-            db: Database session
-            product_id: ID of the product
         """
         await db.execute(
             delete(ProductDimensionGroup).where(
@@ -66,9 +51,6 @@ class DimensionRepository:
         """
         Get the current maximum order_index for hotspots in a product.
 
-        Args:
-            db: Database session
-            product_id: ID of the product
 
         Returns:
             Next available order_index (max + 1)
@@ -91,15 +73,6 @@ class DimensionRepository:
         """
         Create a new dimension group.
 
-        Args:
-            db: Database session
-            product_id: ID of the product
-            name: Name of the dimension group
-            order_index: Order index for the group
-            created_by: ID of the user creating the group
-
-        Returns:
-            Created ProductDimensionGroup instance
         """
         group = ProductDimensionGroup(
             product_id=product_id,
@@ -126,19 +99,6 @@ class DimensionRepository:
         """
         Create a hotspot for a dimension marker.
 
-        Args:
-            db: Database session
-            product_id: ID of the product
-            title: Hotspot label/title
-            description: Hotspot description
-            pos_x: X coordinate
-            pos_y: Y coordinate
-            pos_z: Z coordinate
-            order_index: Order index for the hotspot
-            created_by: ID of the user creating the hotspot
-
-        Returns:
-            UUID of the created hotspot
         """
         hotspot = Hotspot(
             product_id=product_id,
@@ -171,20 +131,6 @@ class DimensionRepository:
         """
         Create a dimension record.
 
-        Args:
-            db: Database session
-            product_id: ID of the product
-            dimension_group_id: ID of the dimension group
-            dimension_name: Name of the dimension (e.g., 'Seat Width')
-            value: Measurement value
-            unit: Measurement unit (e.g., 'cm')
-            start_hotspot_id: ID of the start hotspot
-            end_hotspot_id: ID of the end hotspot
-            order_index: Order index for the dimension
-            created_by: ID of the user creating the dimension
-
-        Returns:
-            Created ProductDimensions instance
         """
         dimension = ProductDimensions(
             product_id=product_id,
@@ -208,12 +154,6 @@ class DimensionRepository:
         """
         Get all dimension groups for a product.
 
-        Args:
-            db: Database session
-            product_id: ID of the product
-
-        Returns:
-            List of ProductDimensionGroup instances
         """
         result = await db.execute(
             select(ProductDimensionGroup)
@@ -228,10 +168,6 @@ class DimensionRepository:
     ) -> list[ProductDimensions]:
         """
         Get all dimensions for a dimension group.
-
-        Args:
-            db: Database session
-            group_id: ID of the dimension group
 
         Returns:
             List of ProductDimensions instances
@@ -249,12 +185,5 @@ class DimensionRepository:
     ) -> Optional[Hotspot]:
         """
         Get a hotspot by ID.
-
-        Args:
-            db: Database session
-            hotspot_id: ID of the hotspot
-
-        Returns:
-            Hotspot instance if found, None otherwise
         """
         return await db.get(Hotspot, hotspot_id)
