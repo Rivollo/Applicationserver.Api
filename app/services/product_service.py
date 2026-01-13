@@ -292,25 +292,18 @@ class ProductService:
             logger.error(f"Failed to create ProductAsset/ProductAssetMapping: {str(e)}\n{traceback.format_exc()}")
             raise RuntimeError(f"Failed to create asset entries: {str(e)}") from e
 
-        # Send message to Service Bus queue instead of calling external API directly
-        # The Azure Function will handle processing and storing
-        from app.services.servicebus_service import send_product_processing_message
-        
-        message_sent = await send_product_processing_message(
-            product_id=str(product.id),
-            user_id=str(user_id),
+        # Call external API with the blob URL to start processing
+        callback_url = "https://vIsls.ixfQ9SpcgPNGjF3A3jaIJTquDTvT63Et.+tDrsGBeOmp.N"
+        external_job_uid = await ProductService.call_external_api(
             blob_url=blob_url,
             target_format=target_format,
-            asset_id=asset_id,
-            mesh_asset_id=mesh_asset_id,
-            name=name,
+            callback_url=callback_url,
         )
         
-        if message_sent:
+        if external_job_uid:
             product.status = ProductStatus.PROCESSING
         else:
             product.status = ProductStatus.DRAFT
-            logger.warning(f"Failed to send message to Service Bus for product {product.id}")
 
         # Increment usage - COMMENTED OUT FOR TESTING
         # license = await LicensingService.get_active_license(db, user_id)
@@ -326,8 +319,7 @@ class ProductService:
             # Refresh might fail, but product should still be valid
             pass
 
-        # Return None for job_uid since we're using Service Bus now
-        return product, blob_url, None
+        return product, blob_url, external_job_uid
 
     @staticmethod
     async def poll_external_api_and_finalize(
