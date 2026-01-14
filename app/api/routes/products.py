@@ -790,6 +790,17 @@ async def get_product_assets_public(
     return api_success(await _build_product_assets_response(product_id, db))
 
 
+@router.get("/me/products", response_model=dict)
+async def get_my_products(
+    current_user: CurrentUser,
+    db: DB,
+):
+    """Get products for the currently authenticated user."""
+    from app.services.product_service import ProductService
+
+    result = await ProductService.get_products_for_current_user(db, current_user.id)
+    return api_success(result)
+
 @router.get("/products/user/{userId}/products", response_model=dict)
 async def get_products_by_user(userId: str, db: DB):
     """Get all products for a user with their primary asset (asset_id = 1)."""
