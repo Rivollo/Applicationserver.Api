@@ -1,10 +1,13 @@
-"""Product link schemas for API operations.
+"""
+Product link schemas for API operations.
 """
 
-from typing import Optional
+from typing import Optional, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
+
+# ---------- Link Type Response ----------
 
 class ProductLinkTypeResponse(BaseModel):
     """Response schema for product link types."""
@@ -14,23 +17,55 @@ class ProductLinkTypeResponse(BaseModel):
     description: Optional[str] = None
 
 
+# ---------- Create / Update Schemas ----------
+
 class ProductLinkCreate(BaseModel):
     """Schema for creating a product link."""
 
-    name: str = Field(..., description="Display name for the link")
-    link: str = Field(..., description="URL or link value")
-    description: Optional[str] = None
-    link_type: Optional[int] = Field(None, description="ID from tbl_product_link_type")
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Display name for the link"
+    )
+    link: HttpUrl = Field(
+        ...,
+        description="Valid URL for the product link"
+    )
+    description: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional description for the link"
+    )
+    link_type: Optional[int] = Field(
+        None,
+        description="ID from tbl_product_link_type"
+    )
+
+    class Config:
+        extra = "forbid"
 
 
 class ProductLinkUpdate(BaseModel):
     """Schema for updating a product link."""
 
-    name: Optional[str] = None
-    link: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=200
+    )
+    link: Optional[HttpUrl] = None
+    description: Optional[str] = Field(
+        None,
+        max_length=500
+    )
     link_type: Optional[int] = None
 
+    class Config:
+        extra = "forbid"
+
+
+# ---------- Response Schema ----------
 
 class ProductLinkResponse(BaseModel):
     """Response schema for product links."""
@@ -43,10 +78,16 @@ class ProductLinkResponse(BaseModel):
     link_type_name: Optional[str] = None
 
 
+# ---------- Bulk Create Schema (CRITICAL) ----------
+
 class BulkProductLinkCreate(BaseModel):
     """Schema for bulk creating product links."""
 
-    links: list[ProductLinkCreate] = Field(
-        default_factory=list,
-        description="List of links to create"
+    links: List[ProductLinkCreate] = Field(
+        ...,
+        min_items=1,
+        description="List of links to create (at least one required)"
     )
+
+    class Config:
+        extra = "forbid"

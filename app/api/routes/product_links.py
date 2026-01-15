@@ -1,16 +1,26 @@
-"""Product link management routes.
-"""
+"""Product link management routes."""
 
 import uuid
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, DB, get_current_user
-from app.schemas.product_links import BulkProductLinkCreate, ProductLinkCreate, ProductLinkUpdate
+from app.schemas.product_links import (
+    BulkProductLinkCreate,
+    ProductLinkCreate,
+    ProductLinkUpdate,
+)
 from app.services.product_link_service import ProductLinkService
 from app.utils.envelopes import api_success
+from app.utils.exceptions import NotFoundException, ValidationException
 
-router = APIRouter(tags=["product-links"], dependencies=[Depends(get_current_user)])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    tags=["product-links"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.get("/product-link-types", response_model=dict)
@@ -19,12 +29,26 @@ async def get_link_types(
     db: DB,
 ):
     """Get all active product link types for dropdown."""
-    link_types = await ProductLinkService.get_link_types(db)
-    return api_success(link_types)
+    try:
+        link_types = await ProductLinkService.get_link_types(db)
+        return api_success(link_types)
+
+    except (NotFoundException, ValidationException):
+        raise
+
+    except Exception:
+        logger.error("Unexpected error while fetching link types", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the request",
+        )
 
 
-
-@router.post("/products/{product_id}/links", response_model=dict)
+@router.post(
+    "/products/{product_id}/links",
+    response_model=dict,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_product_links(
     product_id: str,
     payload: BulkProductLinkCreate,
@@ -34,39 +58,42 @@ async def create_product_links(
     """
     Create product links for a product.
 
-    Does NOT delete or replace existing links - only adds new ones.
-    If the links list is empty, returns success with an empty array.
     """
     try:
         prod_uuid = uuid.UUID(product_id)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid productId",
+            detail="Invalid productId format",
         )
 
     try:
-        # Convert Pydantic models to dicts
-        links_data = [link.model_dump() for link in payload.links]
+        # Convert Pydantic models to dicts and explicitly convert HttpUrl to str
+        links_data = []
+        for link in payload.links:
+            link_dict = link.model_dump(mode='python')
+
+            if 'link' in link_dict and link_dict['link'] is not None:
+                link_dict['link'] = str(link_dict['link'])
+            links_data.append(link_dict)
+        
         result = await ProductLinkService.create_product_links(
             db=db,
             product_id=prod_uuid,
             links_data=links_data,
             user_id=current_user.id,
         )
-    except ValueError as e:
-        if "Product not found" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(e),
-            )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        return api_success(result)
 
-    await db.commit()
-    return api_success(result)
+    except (NotFoundException, ValidationException):
+        raise
+
+    except Exception:
+        logger.error("Unexpected error while creating product links", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the request",
+        )
 
 
 @router.get("/products/{product_id}/links", response_model=dict)
@@ -81,23 +108,22 @@ async def get_product_links(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid productId",
+            detail="Invalid productId format",
         )
 
     try:
         links = await ProductLinkService.get_product_links(db, prod_uuid)
-    except ValueError as e:
-        if "Product not found" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(e),
-            )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        return api_success(links)
 
-    return api_success(links)
+    except (NotFoundException, ValidationException):
+        raise
+
+    except Exception:
+        logger.error("Unexpected error while fetching product links", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the request",
+        )
 
 
 @router.patch("/links/{link_id}", response_model=dict)
@@ -109,28 +135,29 @@ async def update_link(
 ):
     """Update a product link."""
     try:
+        # Convert HttpUrl to string if present
+        link_url = str(payload.link) if payload.link is not None else None
+        
         result = await ProductLinkService.update_link(
             db=db,
             link_id=link_id,
             name=payload.name,
-            link_url=payload.link,
+            link_url=link_url,
             description=payload.description,
             link_type=payload.link_type,
             user_id=current_user.id,
         )
-    except ValueError as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(e),
-            )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        return api_success(result)
 
-    await db.commit()
-    return api_success(result)
+    except (NotFoundException, ValidationException):
+        raise
+
+    except Exception:
+        logger.error("Unexpected error while updating product link", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the request",
+        )
 
 
 @router.delete("/links/{link_id}", response_model=dict)
@@ -146,16 +173,14 @@ async def delete_link(
             link_id=link_id,
             user_id=current_user.id,
         )
-    except ValueError as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(e),
-            )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        return api_success(result)
 
-    await db.commit()
-    return api_success(result)
+    except NotFoundException:
+        raise
+
+    except Exception:
+        logger.error("Unexpected error while deleting product link", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the request",
+        )

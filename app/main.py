@@ -27,6 +27,7 @@ from app.api.routes.dimensions import router as dimensions_router
 from app.api.routes.product_links import router as product_links_router
 from app.api.routes.support import router as support_router
 from app.utils.envelopes import api_success, api_error
+from app.utils.exceptions import AppException
 from app.core.db import init_engine_and_session
 
 
@@ -165,6 +166,14 @@ async def request_logging_middleware(request: Request, call_next):
 @app.on_event("startup")
 def on_startup() -> None:
 	init_engine_and_session()
+
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=api_error(code=exc.code, message=exc.message, details=exc.details),
+    )
 
 
 @app.exception_handler(Exception)
