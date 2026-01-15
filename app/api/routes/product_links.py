@@ -13,7 +13,6 @@ from app.schemas.product_links import (
 )
 from app.services.product_link_service import ProductLinkService
 from app.utils.envelopes import api_success
-from app.utils.exceptions import NotFoundException, ValidationException
 
 logger = logging.getLogger(__name__)
 
@@ -30,18 +29,14 @@ async def get_link_types(
 ):
     """Get all active product link types for dropdown."""
     try:
+        logger.info("Processing get link types request")
         link_types = await ProductLinkService.get_link_types(db)
+        logger.info("Get link types request processed successfully")
         return api_success(link_types)
-
-    except (NotFoundException, ValidationException):
-        raise
-
-    except Exception:
-        logger.error("Unexpected error while fetching link types", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while processing the request",
-        )
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
+        logger.error("A system failure occurred in get link types", exc_info=True)
+        return {"error": error_message}
 
 
 @router.post(
@@ -55,24 +50,19 @@ async def create_product_links(
     current_user: CurrentUser,
     db: DB,
 ):
-    """
-    Create product links for a product.
-
-    """
+    """Create product links for a product."""
     try:
         prod_uuid = uuid.UUID(product_id)
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid productId format",
-        )
+        return {"error": "Invalid productId format"}
 
     try:
-        # Convert Pydantic models to dicts and explicitly convert HttpUrl to str
+        logger.info(f"Processing create product links request for product {prod_uuid}")
+        
+        # Convert HttpUrl to string
         links_data = []
         for link in payload.links:
             link_dict = link.model_dump(mode='python')
-
             if 'link' in link_dict and link_dict['link'] is not None:
                 link_dict['link'] = str(link_dict['link'])
             links_data.append(link_dict)
@@ -83,17 +73,12 @@ async def create_product_links(
             links_data=links_data,
             user_id=current_user.id,
         )
+        logger.info(f"Create product links request processed successfully")
         return api_success(result)
-
-    except (NotFoundException, ValidationException):
-        raise
-
-    except Exception:
-        logger.error("Unexpected error while creating product links", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while processing the request",
-        )
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
+        logger.error("A system failure occurred in create product links", exc_info=True)
+        return {"error": error_message}
 
 
 @router.get("/products/{product_id}/links", response_model=dict)
@@ -106,24 +91,17 @@ async def get_product_links(
     try:
         prod_uuid = uuid.UUID(product_id)
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid productId format",
-        )
+        return {"error": "Invalid productId format"}
 
     try:
+        logger.info(f"Processing get product links request for product {prod_uuid}")
         links = await ProductLinkService.get_product_links(db, prod_uuid)
+        logger.info("Get product links request processed successfully")
         return api_success(links)
-
-    except (NotFoundException, ValidationException):
-        raise
-
-    except Exception:
-        logger.error("Unexpected error while fetching product links", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while processing the request",
-        )
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
+        logger.error("A system failure occurred in get product links", exc_info=True)
+        return {"error": error_message}
 
 
 @router.patch("/links/{link_id}", response_model=dict)
@@ -135,6 +113,8 @@ async def update_link(
 ):
     """Update a product link."""
     try:
+        logger.info(f"Processing update link request for link {link_id}")
+        
         # Convert HttpUrl to string if present
         link_url = str(payload.link) if payload.link is not None else None
         
@@ -147,17 +127,12 @@ async def update_link(
             link_type=payload.link_type,
             user_id=current_user.id,
         )
+        logger.info("Update link request processed successfully")
         return api_success(result)
-
-    except (NotFoundException, ValidationException):
-        raise
-
-    except Exception:
-        logger.error("Unexpected error while updating product link", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while processing the request",
-        )
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
+        logger.error("A system failure occurred in update link", exc_info=True)
+        return {"error": error_message}
 
 
 @router.delete("/links/{link_id}", response_model=dict)
@@ -168,19 +143,15 @@ async def delete_link(
 ):
     """Soft delete a product link."""
     try:
+        logger.info(f"Processing delete link request for link {link_id}")
         result = await ProductLinkService.delete_link(
             db=db,
             link_id=link_id,
             user_id=current_user.id,
         )
+        logger.info("Delete link request processed successfully")
         return api_success(result)
-
-    except NotFoundException:
-        raise
-
-    except Exception:
-        logger.error("Unexpected error while deleting product link", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while processing the request",
-        )
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
+        logger.error("A system failure occurred in delete link", exc_info=True)
+        return {"error": error_message}
