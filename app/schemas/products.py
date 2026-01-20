@@ -38,6 +38,7 @@ class ProductUpdate(BaseModel):
     tags: Optional[list[str]] = Field(None, max_items=20)
 
 
+
 class ProductLinkCreate(BaseModel):
     """Product link create/update model."""
 
@@ -46,15 +47,31 @@ class ProductLinkCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=2000)
 
 
+class BackgroundInput(BaseModel):
+    """Background input from frontend (color or image)."""
+    
+    type: str = Field(..., description="Background type: 'Color' or 'Image'")
+    value: str = Field(..., description="Hex color code (e.g., '#AB902B') or image URL")
+
+
 class ProductDetailsUpdate(BaseModel):
-    """Product details update request for insert/update API."""
+    """Product details update request for insert/update API.
+    
+    Note: When links are provided, they are ADDED to existing links (not replaced).
+    To update or delete existing links, use the dedicated endpoints:
+    - POST /products/{product_id}/links - Add new links
+    - PATCH /links/{link_id} - Update an existing link
+    - DELETE /links/{link_id} - Delete a link
+    """
 
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=2000)
     price: Optional[float] = Field(None, ge=0)
     currency_type: Optional[int] = Field(None, description="Currency type ID (integer)")
-    backgroundid: Optional[int] = Field(None, description="Background ID from tbl_background")
-    links: Optional[list[ProductLinkCreate]] = Field(None, description="Multiple links for the product")
+    background: Optional[BackgroundInput] = Field(None, description="Background with type and value (Color/Image)")
+    backgroundid: Optional[int] = Field(None, description="Background ID from tbl_background (deprecated, use 'background' instead)")
+    links: Optional[list[ProductLinkCreate]] = Field(None, description="Links to ADD to the product (existing links are preserved)")
+
 
 
 class ConfiguratorSettings(BaseModel):
@@ -128,6 +145,7 @@ class ProductAssetsData(BaseModel):
     links: Optional[list[dict]] = None  # Product links
     hotspots: list["ProductAssetsHotspot"] = Field(default_factory=list)
     model: Optional[dict] = None  # Model data including dimensions
+    public_id: Optional[str] = None  # Public ID for published products
 
 
 class ProductAssetsResponse(BaseModel):
