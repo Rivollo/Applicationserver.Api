@@ -69,6 +69,7 @@ from app.services.licensing_service import LicensingService
 from app.services.product_service import product_service
 from app.services.dimension_service import DimensionService
 from app.utils.envelopes import api_success
+from app.models.models import PublishLink
 
 
 router = APIRouter(tags=["products"], dependencies=[Depends(get_current_user)])
@@ -750,6 +751,19 @@ async def _build_product_assets_response(product_id: str, db: DB) -> dict:
     # Fetch dimension data via service
     model_data = await DimensionService.get_product_dimensions(db, product_uuid)
 
+    # Fetch public_id if product is published
+    public_id = None
+    if product.status.value == "published":
+      
+        publish_link_query = select(PublishLink.public_id).where(
+            PublishLink.product_id == product_uuid,  
+            PublishLink.is_enabled == True 
+        )
+        publish_link_result = await db.execute(publish_link_query)
+        public_id_row = publish_link_result.scalar_one_or_none()
+        if public_id_row:
+            public_id = public_id_row
+
     # Build response
     data = ProductAssetsData(
         id=str(product.id),
@@ -766,6 +780,7 @@ async def _build_product_assets_response(product_id: str, db: DB) -> dict:
         links=links_data,
         hotspots=hotspots,
         model=model_data,
+        public_id=public_id,  # Include public_id for published products
     )
 
     return ProductAssetsResponse(data=data).model_dump()
@@ -789,6 +804,17 @@ async def get_product_assets_public(
     """Public (unauthenticated) endpoint that returns product assets."""
     return api_success(await _build_product_assets_response(product_id, db))
 
+
+@router.get("/me/products", response_model=dict)
+async def get_my_products(
+    current_user: CurrentUser,
+    db: DB,
+):
+    """Get products for the currently authenticated user."""
+    from app.services.product_service import ProductService
+
+    result = await ProductService.get_products_for_current_user(db, current_user.id)
+    return api_success(result)
 
 @router.get("/products/user/{userId}/products", response_model=dict)
 async def get_products_by_user(userId: str, db: DB):
@@ -1363,19 +1389,82 @@ async def update_product_details(
             # Store currency type ID as integer
             product.currency_type = payload.currency_type
 
-        if payload.backgroundid is not None:
+        # Handle background - support both new format (background object) and legacy format (backgroundid)
+        if payload.background is not None:
+            logger = logging.getLogger(__name__)
+            logger.info(f"Processing background for product {prod_uuid}: type={payload.background.type}, value={payload.background.value}")
+            
+            # Determine background_type_id based on type
+            background_type_id = 1 if payload.background.type.lower() == "color" else 2
+            
+            # Check if a background with this value already exists
+            existing_bg_query = select(Background).where(
+                Background.background_type_id == background_type_id,
+                Background.image == payload.background.value,
+                Background.isactive == True
+            )
+            existing_bg_result = await db.execute(existing_bg_query)
+            existing_bg = existing_bg_result.scalar_one_or_none()
+            
+            if existing_bg:
+                # Use existing background
+                logger.info(f"Found existing background: id={existing_bg.id}, name={existing_bg.name}")
+                product.background_type = existing_bg.id
+            else:
+                # Create new background record
+                # Get next available ID (since id is not auto-incrementing)
+                from sqlalchemy import func
+                max_id_query = select(func.max(Background.id))
+                max_id_result = await db.execute(max_id_query)
+                max_id = max_id_result.scalar()
+                next_id = (max_id or 0) + 1
+                
+                background_name = f"Color {payload.background.value}" if payload.background.type.lower() == "color" else f"Image {payload.background.value[:50]}"
+                
+                # Get audit user ID
+                audit_user_id = product.created_by if product.created_by else uuid.uuid4()
+                
+                # Insert new background with explicit ID
+                from sqlalchemy import insert
+                insert_stmt = insert(Background.__table__).values(
+                    id=next_id,  # Explicitly set ID
+                    background_type_id=background_type_id,
+                    name=background_name,
+                    description=f"Auto-generated {payload.background.type} background",
+                    image=payload.background.value,
+                    isactive=True,
+                    created_by=audit_user_id,
+                    created_date=datetime.utcnow(),
+                )
+                
+                await db.execute(insert_stmt)
+                await db.flush()
+                
+                logger.info(f"Created new background: id={next_id}, name={background_name}, value={payload.background.value}")
+                product.background_type = next_id
+                
+        elif payload.backgroundid is not None:
+            # Legacy format - backgroundid provided directly
+            logger = logging.getLogger(__name__)
+            logger.info(f"Attempting to set background for product {prod_uuid}: backgroundid={payload.backgroundid}")
+            
             # Verify background exists
             background_result = await db.execute(
                 select(Background).where(Background.id == payload.backgroundid)
             )
             background = background_result.scalar_one_or_none()
             if not background:
+                logger.error(f"Background with ID {payload.backgroundid} not found in database")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Background with ID {payload.backgroundid} not found.",
                 )
+            
+            logger.info(f"Background found: id={background.id}, name={background.name}")
+            
             # Store background ID in background_type column as integer
             product.background_type = payload.backgroundid
+            logger.info(f"Set product.background_type = {product.background_type}")
 
         # Get a valid user ID for audit fields (use product's created_by or a default UUID if None)
         audit_user_id = product.created_by
@@ -1387,9 +1476,13 @@ async def update_product_details(
         product.updated_by = audit_user_id
         product.updated_date = datetime.utcnow()
 
-        # Handle links - replace all existing active links with new ones
-        if payload.links is not None:
+        # Handle links - ADD new links (preserve existing ones)
+        # Unlike the old behavior, this does NOT deactivate existing links
+        if payload.links is not None and len(payload.links) > 0:
             try:
+                logger = logging.getLogger(__name__)
+                logger.info(f"Adding {len(payload.links)} new links to product {product_id} (existing links will be preserved)")
+                
                 # Ensure product is not None before accessing product.id
                 if product is None:
                     raise HTTPException(
@@ -1399,34 +1492,7 @@ async def update_product_details(
                 
                 product_id = product.id
                 
-                # Mark all existing active links as inactive using raw SQL update to avoid ORM issues
-                update_stmt = (
-                    update(ProductLink.__table__)
-                    .where(
-                        ProductLink.productid == str(product_id),
-                        ProductLink.isactive == True,
-                    )
-                    .values(
-                        isactive=False,
-                        updated_by=audit_user_id,
-                        updated_date=datetime.utcnow(),
-                    )
-                )
-                await db.execute(update_stmt)
-                
-                # Flush changes but don't commit yet
-                await db.flush()
-                
-                # Create new links using individual raw SQL inserts with flush (not commit) to avoid batching
-                # Insert each link individually to prevent SQLAlchemy from batching them
-                # Ensure product is not None before accessing product.id
-                if product is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="Product not found.",
-                    )
-                
-                product_id = product.id
+                # Create new links (existing links are NOT touched)
                 for link_data in payload.links:
                     stmt = insert(ProductLink.__table__).values(
                         productid=str(product_id),
@@ -1440,25 +1506,30 @@ async def update_product_details(
                         updated_date=datetime.utcnow(),
                     )
                     await db.execute(stmt)
-                    # Flush each insert to avoid batching, but don't commit yet
-                    await db.flush()
                 
-                # Commit all changes together (product updates, link deactivations, and new links)
-                await db.commit()
-                await db.refresh(product)
+                logger.info(f"Successfully added {len(payload.links)} new links to product {product_id}")
+                
             except Exception as e:
                 import traceback
                 logger = logging.getLogger(__name__)
-                logger.error(f"Error updating product links: {str(e)}\n{traceback.format_exc()}")
+                logger.error(f"Error adding product links: {str(e)}\n{traceback.format_exc()}")
                 await db.rollback()
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to update product links: {str(e)}",
+                    detail=f"Failed to add product links: {str(e)}",
                 )
-        else:
-            # No links to update, just commit product changes
-            await db.commit()
-            await db.refresh(product)
+        
+        # Commit product changes (and new links if any)
+        logger = logging.getLogger(__name__)
+        logger.info(f"BEFORE COMMIT: product.background_type = {product.background_type}")
+        logger.info(f"BEFORE COMMIT: product.name = {product.name}")
+        
+        await db.commit()
+        await db.refresh(product)
+        
+        logger.info(f"AFTER COMMIT: product.background_type = {product.background_type}")
+        logger.info(f"Product {product.id} updated successfully. background_type={product.background_type}, name={product.name}")
+
 
         # Fetch updated product with all related data (same as get_product)
         # Fetch background data if background_type exists (stores background ID as integer)
@@ -1539,9 +1610,14 @@ async def update_product_details(
 
         if background_data:
             response_data["background"] = background_data.model_dump(exclude_none=True)
+            logger.info(f"Background data included in response: {background_data.model_dump(exclude_none=True)}")
+        else:
+            logger.warning(f"No background data to include in response (product.background_type={product.background_type})")
+            
         if links_data:
             response_data["links"] = [link.model_dump(exclude_none=True) for link in links_data]
 
+        logger.info(f"Final response keys: {response_data.keys()}")
         return api_success(response_data)
     except HTTPException:
         # Re-raise HTTP exceptions as-is
