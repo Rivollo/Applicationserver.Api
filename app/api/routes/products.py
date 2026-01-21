@@ -70,6 +70,7 @@ from app.services.product_service import product_service
 from app.services.dimension_service import DimensionService
 from app.utils.envelopes import api_success
 from app.models.models import PublishLink
+from app.services.product_service import ProductService
 
 
 router = APIRouter(tags=["products"], dependencies=[Depends(get_current_user)])
@@ -810,9 +811,7 @@ async def get_my_products(
     current_user: CurrentUser,
     db: DB,
 ):
-    """Get products for the currently authenticated user."""
-    from app.services.product_service import ProductService
-
+    
     result = await ProductService.get_products_for_current_user(db, current_user.id)
     return api_success(result)
 
