@@ -437,6 +437,46 @@ class ProductService:
                         product.status = ProductStatus.DRAFT
                         await session.commit()
 
+    @staticmethod
+    async def get_products_for_current_user(
+        db: AsyncSession, user_id: uuid.UUID
+    ) -> dict:
+        """Get all products for the current user with their primary assets."""
+        from app.database.products_repo import ProductRepository
+        from app.schemas.products import ProductWithPrimaryAsset, ProductsByUserResponse
+
+        products = await ProductRepository.get_products_by_user_id(db, user_id)
+        items: list[ProductWithPrimaryAsset] = []
+
+        for product in products:
+            asset_data = await ProductRepository.get_primary_asset_for_product(db, product.id)
+            
+            image = None
+            asset_type = None
+            asset_type_id = None
+            
+            if asset_data:
+                image, asset_type, asset_type_id = asset_data
+
+            items.append(
+                ProductWithPrimaryAsset(
+                    id=str(product.id),
+                    name=product.name,
+                    status=product.status.value,
+                    image=image,
+                    asset_type=asset_type,
+                    asset_type_id=asset_type_id,
+                    description=product.description,
+                    price=float(product.price) if product.price is not None else None,
+                    currency_type=str(product.currency_type) if product.currency_type is not None else None,
+                    background_type=str(product.background_type) if product.background_type is not None else None,
+                    created_at=product.created_at,
+                    updated_at=product.updated_at,
+                )
+            )
+
+        return ProductsByUserResponse(items=items).model_dump()
+
 
 product_service = ProductService()
 
