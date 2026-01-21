@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Product, ProductAsset, ProductAssetMapping, AssetStatic
+from app.models.models import Product, ProductAsset, ProductAssetMapping, AssetStatic, PublishLink
 
 
 class ProductRepository:
@@ -55,3 +55,32 @@ class ProductRepository:
         if row:
             return (row.image, row.asset_name, row.asset_id)
         return None
+
+    @staticmethod
+    async def get_public_ids_for_products(
+        db: AsyncSession, product_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, str]:
+        """Get public_ids for multiple products in bulk.
+        
+        Returns a mapping of product_id -> public_id for products that are published
+        and have an enabled entry in PublishLink.
+        
+        Args:
+            db: Database session
+            product_ids: List of product UUIDs to fetch public_ids for
+            
+        Returns:
+            Dictionary mapping product_id to public_id (only for published products with enabled links)
+        """
+        if not product_ids:
+            return {}
+        
+        result = await db.execute(
+            select(PublishLink.product_id, PublishLink.public_id)
+            .where(
+                PublishLink.product_id.in_(product_ids),
+                PublishLink.is_enabled.is_(True),
+            )
+        )
+        rows = result.all()
+        return {row.product_id: row.public_id for row in rows}

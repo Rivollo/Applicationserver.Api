@@ -185,6 +185,7 @@ class ProductWithPrimaryAsset(BaseModel):
     background_type: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    public_id: Optional[str] = None
 
 
 class ProductsByUserResponse(BaseModel):

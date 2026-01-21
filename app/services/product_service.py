@@ -10,6 +10,8 @@ from sqlalchemy import select
 from app.models.models import Product, ProductAsset, ProductAssetMapping, ProductStatus
 from app.services.storage import storage_service
 from app.integrations.service_bus_publisher import ServiceBusPublisher
+from app.database.products_repo import ProductRepository
+from app.schemas.products import ProductWithPrimaryAsset, ProductsByUserResponse
 
 
 class ProductService:
@@ -167,11 +169,19 @@ class ProductService:
     async def get_products_for_current_user(
         db: AsyncSession, user_id: uuid.UUID
     ) -> dict:
-        """Get all products for the current user with their primary assets."""
-        from app.database.products_repo import ProductRepository
-        from app.schemas.products import ProductWithPrimaryAsset, ProductsByUserResponse
+
 
         products = await ProductRepository.get_products_by_user_id(db, user_id)
+        
+        # Fetch public_ids for all published products in bulk
+        published_product_ids = [
+            product.id for product in products 
+            if product.status.value == "published"
+        ]
+        public_id_map = await ProductRepository.get_public_ids_for_products(
+            db, published_product_ids
+        )
+        
         items: list[ProductWithPrimaryAsset] = []
 
         for product in products:
@@ -183,6 +193,11 @@ class ProductService:
             
             if asset_data:
                 image, asset_type, asset_type_id = asset_data
+
+            # Get public_id if product is published and has enabled publish link
+            public_id = None
+            if product.status.value == "published":
+                public_id = public_id_map.get(product.id)
 
             items.append(
                 ProductWithPrimaryAsset(
@@ -198,6 +213,7 @@ class ProductService:
                     background_type=str(product.background_type) if product.background_type is not None else None,
                     created_at=product.created_at,
                     updated_at=product.updated_at,
+                    public_id=public_id,
                 )
             )
 
