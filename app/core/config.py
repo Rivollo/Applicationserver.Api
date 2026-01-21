@@ -39,4 +39,8 @@ class Settings(BaseSettings):
 	# Google OAuth
 	GOOGLE_CLIENT_ID: str = Field(default="") 
 
+	SERVICEBUS_CONNECTION_STRING: str = Field(default="")
+	SERVICEBUS_QUEUE_NAME: str = Field(default="")
+
+
 settings = Settings()
