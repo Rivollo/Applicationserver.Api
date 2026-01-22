@@ -5,9 +5,10 @@ from typing import BinaryIO, Optional
 
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, insert
+from datetime import datetime
 
-from app.models.models import Product, ProductAsset, ProductAssetMapping, ProductStatus
+from app.models.models import Product, ProductAsset, ProductAssetMapping, ProductStatus, Background
 from app.services.storage import storage_service
 from app.integrations.service_bus_publisher import ServiceBusPublisher
 from app.database.products_repo import ProductRepository
@@ -164,6 +165,152 @@ class ProductService:
             pass
 
         return product, blob_url, None
+
+    @staticmethod
+    async def update_product_background_image(
+        db: AsyncSession,
+        product_id: uuid.UUID,
+        user_id: uuid.UUID,
+        image_stream: BinaryIO,
+        image_filename: str,
+        image_content_type: Optional[str] = None,
+    ) -> tuple[int, str]:
+        """Upload background image and create Background record.
+        
+        Args:
+            db: Database session
+            product_id: Product ID
+            user_id: User ID
+            image_stream: Binary stream of the image
+            image_filename: Image filename
+            image_content_type: Content type of the image
+            
+        Returns:
+            Tuple of (background_id, blob_url)
+        """
+        logger = logging.getLogger(__name__)
+        
+        # -------------------------------
+        # 1. Upload background image
+        # -------------------------------
+        blob_url = f"https://placeholder.dev/{user_id}/{product_id}/backgrounds/{image_filename}"
+        try:
+            image_stream.seek(0)
+            _, blob_url = storage_service.upload_background_image(
+                user_id=str(user_id),
+                product_id=str(product_id),
+                filename=image_filename,
+                content_type=image_content_type,
+                stream=image_stream,
+            )
+            logger.info("Background image uploaded: %s", blob_url)
+        except Exception as e:
+            logger.error("Background image upload failed, using placeholder: %s", e)
+            raise RuntimeError("Failed to upload background image") from e
+        
+        # -------------------------------
+        # 2. Get next available Background ID
+        # -------------------------------
+        try:
+            result = await db.execute(select(func.max(Background.id)))
+            max_id = result.scalar()
+            next_id = (max_id or 0) + 1
+            logger.info("Next Background ID: %s", next_id)
+        except Exception as e:
+            logger.exception("Failed to get next Background ID")
+            raise RuntimeError("Failed to get next Background ID") from e
+        
+        # -------------------------------
+        # 3. Insert new Background record
+        # -------------------------------
+        try:
+            stmt = insert(Background).values(
+                id=next_id,
+                background_type_id=2,  # image type
+                name=f"Background Image {image_filename}",
+                description="Uploaded background image",
+                image=blob_url,
+                isactive=True,
+                created_by=user_id,
+                created_date=datetime.utcnow(),
+            )
+            await db.execute(stmt)
+            await db.commit()
+            logger.info("Background record created with ID: %s", next_id)
+        except Exception as e:
+            logger.exception("Failed to create Background record")
+            await db.rollback()
+            raise RuntimeError("Failed to create Background record") from e
+        
+        return next_id, blob_url
+
+    @staticmethod
+    async def update_product_background_color(
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        color_value: str,
+    ) -> int:
+        """Get or create Background record for a color value.
+        
+        Args:
+            db: Database session
+            user_id: User ID
+            color_value: Color value (e.g., hex color)
+            
+        Returns:
+            Background ID
+        """
+        logger = logging.getLogger(__name__)
+        
+        # -------------------------------
+        # 1. Query for existing Background
+        # -------------------------------
+        try:
+            stmt = select(Background).where(
+                Background.background_type_id == 1,  # color type
+                Background.image == color_value,
+                Background.isactive == True,
+            )
+            result = await db.execute(stmt)
+            existing_background = result.scalar_one_or_none()
+            
+            if existing_background:
+                logger.info("Found existing color background with ID: %s", existing_background.id)
+                return existing_background.id
+        except Exception as e:
+            logger.exception("Failed to query for existing Background")
+            raise RuntimeError("Failed to query for existing Background") from e
+        
+        # -------------------------------
+        # 2. Create new Background if not found
+        # -------------------------------
+        try:
+            # Get next available Background ID
+            result = await db.execute(select(func.max(Background.id)))
+            max_id = result.scalar()
+            next_id = (max_id or 0) + 1
+            logger.info("Next Background ID: %s", next_id)
+            
+            # Insert new Background record
+            stmt = insert(Background).values(
+                id=next_id,
+                background_type_id=1,  # color type
+                name=f"Background Color {color_value}",
+                description="Color background",
+                image=color_value,
+                isactive=True,
+                created_by=user_id,
+                created_date=datetime.utcnow(),
+            )
+            await db.execute(stmt)
+            await db.commit()
+            logger.info("Background color record created with ID: %s", next_id)
+            
+            return next_id
+        except Exception as e:
+            logger.exception("Failed to create Background color record")
+            await db.rollback()
+            raise RuntimeError("Failed to create Background color record") from e
 
     @staticmethod
     async def get_products_for_current_user(
